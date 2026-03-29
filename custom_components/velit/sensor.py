@@ -7,6 +7,8 @@ Heater sensors (all sourced from coordinator data):
   - Supply voltage
   - Fan RPM
   - Altitude
+  - Fuel pump frequency (Hz)
+  - Heater power (W)
   - Fault code (human-readable string)
   - Machine state (human-readable string)
 
@@ -32,6 +34,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_NAME,
     UnitOfElectricPotential,
+    UnitOfFrequency,
+    UnitOfPower,
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
@@ -104,10 +108,27 @@ HEATER_SENSORS: tuple[VelitSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     VelitSensorEntityDescription(
+        key="fuel_pump_freq",
+        data_key="fuel_pump_hz",
+        name="Fuel Pump Frequency",
+        device_class=SensorDeviceClass.FREQUENCY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfFrequency.HERTZ,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    VelitSensorEntityDescription(
+        key="heater_power",
+        data_key="heater_power_w",
+        name="Heater Power",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    VelitSensorEntityDescription(
         key="fault_code",
         data_key="fault_name",
         name="Fault",
-        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     VelitSensorEntityDescription(
         key="machine_state",

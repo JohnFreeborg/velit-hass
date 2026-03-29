@@ -42,6 +42,14 @@
     }
   },
   "entity": {
+    "button": {
+      "prime_fuel_pump": {
+        "name": "Prime Fuel Pump"
+      },
+      "cleaning": {
+        "name": "Clean (Residual Fuel Clearance)"
+      }
+    },
     "sensor": {
       "inlet_temp": {
         "name": "Inlet Temperature"
@@ -60,6 +68,12 @@
       },
       "altitude": {
         "name": "Altitude"
+      },
+      "fuel_pump_freq": {
+        "name": "Fuel Pump Frequency"
+      },
+      "heater_power": {
+        "name": "Heater Power"
       },
       "fault_code": {
         "name": "Fault"
