@@ -17,6 +17,7 @@ from typing import Any
 from homeassistant.components.climate import (
     ClimateEntity,
     ClimateEntityFeature,
+    HVACAction,
     HVACMode,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -81,9 +82,8 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
     """Climate entity for a Velit heater (protocol V1.02).
 
     HVAC modes:
-      OFF       — heater is shut down
-      HEAT      — heater running (manual or thermostat preset)
-      FAN_ONLY  — ventilation only (func 0x03 / 0x04)
+      OFF   — heater is shut down
+      HEAT  — heater running (manual or thermostat preset)
 
     Presets (only meaningful in HEAT mode):
       manual      — fixed gear, no thermostat
@@ -92,7 +92,7 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
     Fan modes: gear levels 1–5 (only meaningful in manual mode).
     """
 
-    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.FAN_ONLY]
+    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT]
     _attr_preset_modes = ["manual", "thermostat"]
     _attr_fan_modes = FAN_MODES
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
@@ -131,10 +131,6 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
         state = self.coordinator.data["machine_state"]
         if state == 0:
             return HVACMode.OFF
-        work_mode = self.coordinator.data["work_mode"]
-        # Gear 0 with no work mode implies ventilation only.
-        if work_mode == 0:
-            return HVACMode.FAN_ONLY
         return HVACMode.HEAT
 
     @property
@@ -164,6 +160,37 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
             return None
         return str(self.coordinator.data["current_gear"])
 
+    @property
+    def hvac_action(self) -> HVACAction | None:
+        """Current action shown on the climate card.
+
+        Maps machine state and fault code to an HVACAction so the climate card
+        reflects what the device is doing, not just what mode it is set to.
+        """
+        if self.coordinator.data is None:
+            return None
+        # Any active fault — device is not operational.
+        if self.coordinator.data["fault_code"] != 0:
+            return HVACAction.OFF
+        state = self.coordinator.data["machine_state"]
+        if state == 1:
+            return HVACAction.HEATING
+        if state == 2:
+            # Fan running to cool combustion chamber after shutdown.
+            return HVACAction.FAN
+        # Standby, overtemp standby, cleaning, clean complete — no active output.
+        return HVACAction.IDLE
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Expose machine state and fault as automation-accessible attributes."""
+        if self.coordinator.data is None:
+            return {}
+        return {
+            "machine_state": self.coordinator.data.get("machine_state_str"),
+            "fault": self.coordinator.data.get("fault_name"),
+        }
+
     # ------------------------------------------------------------------
     # Actions — send command then refresh to confirm state
     # ------------------------------------------------------------------
@@ -171,8 +198,6 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if hvac_mode == HVACMode.OFF:
             await self.coordinator._client.send_command(0x02, bytes([0x00]))
-        elif hvac_mode == HVACMode.FAN_ONLY:
-            await self.coordinator._client.send_command(0x03, bytes([0x00]))
         elif hvac_mode == HVACMode.HEAT:
             # Start in the currently selected preset mode.
             mode_byte = (

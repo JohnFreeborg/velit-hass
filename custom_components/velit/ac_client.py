@@ -178,12 +178,23 @@ class VelitACClient:
 
     async def connect(self) -> None:
         """Connect to the device and subscribe to response notifications."""
-        self._client = BleakClient(
+        client = BleakClient(
             self._address,
             disconnected_callback=self._on_disconnect,
         )
-        await self._client.connect()
-        await self._client.start_notify(UUID_READ_NOTIFY, self._on_notification)
+        self._client = client
+        try:
+            await client.connect()
+            await client.start_notify(UUID_READ_NOTIFY, self._on_notification)
+        except Exception:
+            # Disconnect before re-raising so BlueZ releases this connection and
+            # any stale notification subscription — prevents "Notify acquired" on
+            # the next attempt.
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            raise
         self._connected = True
         self.unavailable = False
         self._consecutive_failures = 0
@@ -342,6 +353,11 @@ class VelitACClient:
 
     def _on_disconnect(self, _client: BleakClient) -> None:
         """Called by bleak when the connection is lost unexpectedly."""
+        if not self._connected:
+            # The disconnect fired during a failed connect() attempt —
+            # _connected was never set True. connect() handles its own cleanup;
+            # do not start a reconnect loop here.
+            return
         self._connected = False
         _LOGGER.warning("Connection lost to %s", self._address)
         if self._pending and not self._pending.done():

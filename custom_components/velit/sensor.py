@@ -129,7 +129,6 @@ HEATER_SENSORS: tuple[VelitSensorEntityDescription, ...] = (
         key="fault_code",
         data_key="fault_name",
         name="Fault",
-        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     VelitSensorEntityDescription(
         key="machine_state",
