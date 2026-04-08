@@ -8,7 +8,9 @@ Heater:
     restarting the integration.
 
 AC:
-  No switch entities at this time.
+  VelitACBLESwitch — same behaviour as the heater BLE switch. BLE allows
+    only a single connection; releasing the connection lets the Velit mobile
+    app pair while keeping the integration entry intact.
 """
 
 from __future__ import annotations
@@ -24,8 +26,8 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DEVICE_TYPE_HEATER, DOMAIN
-from .coordinator import VelitHeaterCoordinator
+from .const import DEVICE_TYPE_AC, DEVICE_TYPE_HEATER, DOMAIN
+from .coordinator import VelitACCoordinator, VelitHeaterCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,15 +38,18 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Velit switch entities from a config entry."""
-    if entry.data["device_type"] != DEVICE_TYPE_HEATER:
-        return
-
-    coordinator: VelitHeaterCoordinator = entry.runtime_data
-    async_add_entities([
-        VelitHeaterBLESwitch(coordinator, entry),
-        VelitHeaterFuelPrimingSwitch(coordinator, entry),
-        VelitHeaterCleaningSwitch(coordinator, entry),
-    ])
+    if entry.data["device_type"] == DEVICE_TYPE_HEATER:
+        coordinator: VelitHeaterCoordinator = entry.runtime_data
+        async_add_entities([
+            VelitHeaterBLESwitch(coordinator, entry),
+            VelitHeaterFuelPrimingSwitch(coordinator, entry),
+            VelitHeaterCleaningSwitch(coordinator, entry),
+        ])
+    elif entry.data["device_type"] == DEVICE_TYPE_AC:
+        ac_coordinator: VelitACCoordinator = entry.runtime_data
+        async_add_entities([
+            VelitACBLESwitch(ac_coordinator, entry),
+        ])
 
 
 class VelitHeaterBLESwitch(CoordinatorEntity[VelitHeaterCoordinator], SwitchEntity):
@@ -235,4 +240,55 @@ class VelitHeaterCleaningSwitch(CoordinatorEntity[VelitHeaterCoordinator], Switc
         Pushes state back immediately so the UI snaps back to on rather than
         appearing to accept the off command.
         """
+        self.async_write_ha_state()
+
+
+class VelitACBLESwitch(CoordinatorEntity[VelitACCoordinator], SwitchEntity):
+    """Toggle switch for the AC BLE connection.
+
+    On  — BLE connected, coordinator polling normally.
+    Off — BLE disconnected, reconnect loop suppressed. The device is free
+          for other apps (e.g. the Velit mobile app) to use.
+
+    Turning the switch back on triggers an immediate connect attempt. If it
+    fails (device busy), the switch stays off and the user can retry.
+    """
+
+    _attr_name = "BLE Connection"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:bluetooth"
+
+    def __init__(
+        self,
+        coordinator: VelitACCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.data['address']}_ble_connection"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.data["address"])},
+            name=entry.data.get(CONF_NAME, entry.data["address"]),
+            manufacturer="Velit",
+        )
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator._client.connected
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Connect to the device and resume polling."""
+        try:
+            await self.coordinator._client.connect()
+            await self.coordinator.async_request_refresh()
+        except Exception as exc:
+            _LOGGER.warning("BLE reconnect failed: %s", exc)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Disconnect from the device and suppress automatic reconnection."""
+        await self.coordinator._client.disconnect()
         self.async_write_ha_state()
