@@ -152,7 +152,7 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
             return None
         if self._ventilating:
             actual = HVACMode.FAN_ONLY
-        elif self.coordinator.data["machine_state"] == 0:
+        elif self.coordinator.data["machine_state"] in (0, 2):
             actual = HVACMode.OFF
         else:
             actual = HVACMode.HEAT
@@ -207,12 +207,14 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
         if self.coordinator.data["fault_code"] != 0:
             return HVACAction.OFF
         state = self.coordinator.data["machine_state"]
+        if state == 0:
+            return HVACAction.OFF
         if state == 1:
             return HVACAction.HEATING
         if state == 2:
             # Fan running to cool combustion chamber after shutdown.
             return HVACAction.FAN
-        # Standby, overtemp standby, cleaning, clean complete — no active output.
+        # Overtemp standby, cleaning, clean complete — no active output.
         return HVACAction.IDLE
 
     @property
