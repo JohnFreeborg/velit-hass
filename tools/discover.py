@@ -5,7 +5,7 @@ probe the device's expected packet addresses, and confirm the protocol
 behaves as documented.
 
 Usage:
-    python tools/discover.py [--address AA:BB:CC:DD:EE:FF]
+    python tools/discover.py [--address ADDR] [--test-writes] [--test-fan-sequence]
 
 Without --address: scans for all nearby Velit devices and prints their
 full advertisement data. Useful for capturing manufacturer/service data
@@ -18,16 +18,25 @@ target address, then connects and:
   3. Queries firmware version via JSON command (AC protocol).
   4. Subscribes to the notification characteristic (FFe1).
   5. Sends heater Query 1 (0x0A) and Query 2 (0x0B) with address candidates.
-  6. If no heater responses, sends AC query packets (0x5A5A framing) for
+  6. Queries heater firmware version via 0x6A if heater responses were received.
+  7. If no heater responses, sends AC query packets (0x5A5A framing) for
      power, mode, temperature, fan speed, fault, and inlet temperature.
-  7. Prints all raw notifications received throughout.
+  8. Prints all raw notifications received throughout.
+
+Optional write flags (heater only, no-op if device does not respond to Q1/Q2):
+  --test-writes         Send 0x03 (start ventilation) then 0x04 (stop) from
+                        standby. Confirms whether the device responds physically.
+  --test-fan-sequence   Start heat (0x01), poll Q1 until machine_state != 0,
+                        then send 0x03 (fan mode switch), observe Q1 for 20s,
+                        then stop (0x02). Tests whether 0x03 acts as a mode
+                        switch while the device is running.
 
 Hardware verification targets:
   - Capture advertisement bytes to determine device type differentiators
     (manufacturer ID, service UUIDs in advertisement vs GATT).
   - Confirm heater or AC protocol response structure against spec docs.
   - Determine which master/slave addresses the heater accepts.
-  - Capture AC firmware version string.
+  - Capture heater firmware version via 0x6A and AC firmware via JSON info cmd.
   - Confirm AC two-way communication with 0x5A5A framed packets.
 """
 
@@ -79,6 +88,16 @@ _SLAVE_CANDIDATES = [
 
 _HEATER_QUERY_1 = 0x0A  # Query Command 1 — machine state, temps, fan RPM, etc.
 _HEATER_QUERY_2 = 0x0B  # Query Command 2 — inlet/casing/outlet temps, voltage
+_HEATER_FIRMWARE_VERSION = 0x6A  # Firmware version query (OTA channel)
+_HEATER_START_HEAT = 0x01         # Start heating (data: 0x01=manual, 0x02=thermostat)
+_HEATER_STOP_HEAT = 0x02          # Stop heating / power off
+_HEATER_START_VENTILATION = 0x03  # Start fan-only ventilation (write command)
+_HEATER_STOP_VENTILATION = 0x04   # Stop fan-only ventilation (write command)
+
+# Known-good heater addresses confirmed on hardware (2026-03-25, Velit 4000P).
+# Slave 0x0000002D is hardcoded in the device; master is arbitrary.
+_KNOWN_MASTER = bytes([0x00, 0x00, 0x00, 0x01])
+_KNOWN_SLAVE = bytes([0x00, 0x00, 0x00, 0x2D])
 
 # AC product code used in all 0x5A5A framed packets (per V1.01 spec example).
 _AC_PRODUCT_CODE = 0x01
@@ -213,7 +232,7 @@ async def _capture_advertisement(address: str) -> tuple[BLEDevice, Advertisement
     return result
 
 
-async def probe(address: str) -> None:
+async def probe(address: str, test_writes: bool = False, test_fan_sequence: bool = False) -> None:
     """Connect to a device and run heater and AC diagnostic probes."""
     notifications: list[bytes] = []
 
@@ -279,6 +298,141 @@ async def probe(address: str) -> None:
 
         heater_notifications = len(notifications) - heater_notification_start
 
+        # --- Heater firmware version query ---
+        # Only sent when the device responded to Q1/Q2 — confirms it is a heater.
+        # Uses known-good addresses (slave 0x0000002D confirmed on hardware).
+        if heater_notifications > 0:
+            print("\nQuerying heater firmware version (func 0x6A)...")
+            fw_pkt = _build_heater_packet(
+                _KNOWN_MASTER, _KNOWN_SLAVE, _HEATER_FIRMWARE_VERSION, bytes([0x01])
+            )
+            print(f"  >> packet: {fw_pkt.hex(' ')}")
+            try:
+                await client.write_gatt_char(_UUID_WRITE, fw_pkt, response=True)
+            except Exception as exc:
+                print(f"  write error: {exc}")
+            await asyncio.sleep(1.0)
+
+        # --- Fan mode write test (opt-in via --test-writes) ---
+        # Sends 0x03 from standby. If the fan does not start, the device likely
+        # requires a prior heat-start command (0x01) before accepting mode switches.
+        # Use --test-fan-sequence to test the full heat-start → fan-switch path.
+        if test_writes and heater_notifications > 0:
+            print("\n-- Write test: start ventilation (0x03) from standby --")
+            print("  Sending 0x03 — fan should start; no combustion expected.")
+            fan_on_pkt = _build_heater_packet(
+                _KNOWN_MASTER, _KNOWN_SLAVE, _HEATER_START_VENTILATION, bytes([0x00])
+            )
+            print(f"  >> packet: {fan_on_pkt.hex(' ')}")
+            try:
+                await client.write_gatt_char(_UUID_WRITE, fan_on_pkt, response=True)
+            except Exception as exc:
+                print(f"  write error: {exc}")
+            await asyncio.sleep(3.0)  # observe physical response
+
+            print("\n-- Write test: stop ventilation (0x04) --")
+            fan_off_pkt = _build_heater_packet(
+                _KNOWN_MASTER, _KNOWN_SLAVE, _HEATER_STOP_VENTILATION, bytes([0x00])
+            )
+            print(f"  >> packet: {fan_off_pkt.hex(' ')}")
+            try:
+                await client.write_gatt_char(_UUID_WRITE, fan_off_pkt, response=True)
+            except Exception as exc:
+                print(f"  write error: {exc}")
+            await asyncio.sleep(1.0)
+
+        # --- Fan sequence test (opt-in via --test-fan-sequence) ---
+        # Tests the theory that 0x03 is a mode switch (heat → fan-only), not a
+        # cold-start command. The heater startup sequence takes ~30-60s (fan spin-up,
+        # fuel pump prime, ignition). We poll Q1 every 5s until machine_state is
+        # non-zero before sending 0x03.
+        if test_fan_sequence and heater_notifications > 0:
+            q1_pkt = _build_heater_packet(
+                _KNOWN_MASTER, _KNOWN_SLAVE, _HEATER_QUERY_1, bytes([0x00])
+            )
+
+            print("\n-- Fan sequence test: start heat (0x01, manual mode) --")
+            heat_on_pkt = _build_heater_packet(
+                _KNOWN_MASTER, _KNOWN_SLAVE, _HEATER_START_HEAT, bytes([0x01])
+            )
+            print(f"  >> packet: {heat_on_pkt.hex(' ')}")
+            try:
+                await client.write_gatt_char(_UUID_WRITE, heat_on_pkt, response=True)
+            except Exception as exc:
+                print(f"  write error: {exc}")
+
+            # Poll Q1 every 5s until machine_state != 0 (device is running),
+            # or until 90s have elapsed. machine_state is byte 4 of Q1 data
+            # (raw response byte index 20, 0-indexed from response start).
+            print("  Polling Q1 every 5s until device is running (machine_state != 0)...")
+            machine_state = 0
+            for poll in range(18):  # up to 90s
+                await asyncio.sleep(5.0)
+                poll_start = len(notifications)
+                try:
+                    await client.write_gatt_char(_UUID_WRITE, q1_pkt, response=True)
+                except Exception as exc:
+                    print(f"  Q1 write error: {exc}")
+                    continue
+                await asyncio.sleep(0.5)
+                # Parse the most recent Q1 notification for machine_state.
+                # Response layout: AA len master(4) slave(4) SF(2) func data... cksum(2)
+                # machine_state = data[4], data starts at byte index 13.
+                for notif in notifications[poll_start:]:
+                    if len(notif) >= 21 and notif[0] == 0xAA and notif[12] == _HEATER_QUERY_1:
+                        machine_state = notif[17]  # byte 13 + offset 4
+                        print(f"  Poll {poll + 1}: machine_state={machine_state}  raw={notif.hex(' ')}")
+                        break
+                if machine_state != 0:
+                    print(f"  Device is running (machine_state={machine_state}). Switching to fan mode.")
+                    break
+            else:
+                print("  Timeout waiting for device to start. Sending stop and aborting.")
+                stop_pkt = _build_heater_packet(
+                    _KNOWN_MASTER, _KNOWN_SLAVE, _HEATER_STOP_HEAT, bytes([0x00])
+                )
+                await client.write_gatt_char(_UUID_WRITE, stop_pkt, response=True)
+                machine_state = -1  # signal abort
+
+            if machine_state > 0:
+                print("\n-- Fan sequence test: switch to ventilation (0x03) --")
+                fan_on_pkt = _build_heater_packet(
+                    _KNOWN_MASTER, _KNOWN_SLAVE, _HEATER_START_VENTILATION, bytes([0x00])
+                )
+                print(f"  >> packet: {fan_on_pkt.hex(' ')}")
+                try:
+                    await client.write_gatt_char(_UUID_WRITE, fan_on_pkt, response=True)
+                except Exception as exc:
+                    print(f"  write error: {exc}")
+
+                # Poll Q1 a few times to observe machine_state after the switch.
+                print("  Polling Q1 for 20s to observe state after fan switch...")
+                for poll in range(4):
+                    await asyncio.sleep(5.0)
+                    poll_start = len(notifications)
+                    try:
+                        await client.write_gatt_char(_UUID_WRITE, q1_pkt, response=True)
+                    except Exception as exc:
+                        print(f"  Q1 write error: {exc}")
+                        continue
+                    await asyncio.sleep(0.5)
+                    for notif in notifications[poll_start:]:
+                        if len(notif) >= 21 and notif[0] == 0xAA and notif[12] == _HEATER_QUERY_1:
+                            ms = notif[17]
+                            print(f"  Poll {poll + 1}: machine_state={ms}  raw={notif.hex(' ')}")
+                            break
+
+                print("\n-- Fan sequence test: stop (0x02) --")
+                stop_pkt = _build_heater_packet(
+                    _KNOWN_MASTER, _KNOWN_SLAVE, _HEATER_STOP_HEAT, bytes([0x00])
+                )
+                print(f"  >> packet: {stop_pkt.hex(' ')}")
+                try:
+                    await client.write_gatt_char(_UUID_WRITE, stop_pkt, response=True)
+                except Exception as exc:
+                    print(f"  write error: {exc}")
+                await asyncio.sleep(2.0)
+
         # --- AC probe ---
         ac_notification_start = len(notifications)
 
@@ -337,10 +491,29 @@ def main() -> None:
         metavar="ADDR",
         help="BLE address to probe directly (captures advertisement, then connects)",
     )
+    parser.add_argument(
+        "--test-writes",
+        action="store_true",
+        help=(
+            "Send write commands to the heater during probe: start ventilation (0x03) "
+            "then stop ventilation (0x04) from standby. "
+            "Only runs if the device is confirmed as a heater."
+        ),
+    )
+    parser.add_argument(
+        "--test-fan-sequence",
+        action="store_true",
+        help=(
+            "Test fan-only mode via heat-start sequence: start heat (0x01) → "
+            "switch to fan (0x03) → stop (0x02). Tests the theory that 0x03 is a "
+            "mode switch, not a cold-start command. Device will briefly attempt to "
+            "heat before the mode switch. Only runs if device is confirmed as a heater."
+        ),
+    )
     args = parser.parse_args()
 
     if args.address:
-        asyncio.run(probe(args.address))
+        asyncio.run(probe(args.address, test_writes=args.test_writes, test_fan_sequence=args.test_fan_sequence))
     else:
         asyncio.run(scan())
 
