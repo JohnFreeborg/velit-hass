@@ -194,6 +194,57 @@ class TestVelitHeaterCoordinatorParse:
 
 
 # ---------------------------------------------------------------------------
+# Heater coordinator — firmware version query (0x6A)
+# ---------------------------------------------------------------------------
+
+# 0x6A response payload captured on firmware 3.13 (2026-04-16).
+# Bytes [14:16] = 0x01 0x39 = 313 → "3.13".
+_FW_RESPONSE_DATA = bytes([
+    0xFF, 0xFF, 0xFF, 0xFF, 0x03, 0x01, 0x01, 0x03,
+    0x25, 0xB0, 0x80, 0x26, 0xF1, 0x01, 0x01, 0x39,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x0C,
+])
+
+
+class TestHeaterFirmwareVersionQuery:
+    async def _make_coord(self):
+        hass = _make_hass()
+        entry = _make_entry()
+        with patch("custom_components.velit.coordinator.VelitHeaterClient") as mock_cls:
+            coord = VelitHeaterCoordinator(hass, entry)
+            coord._client = mock_cls.return_value
+        return coord
+
+    async def test_firmware_version_parsed(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(
+            return_value={"data": _FW_RESPONSE_DATA, "func": 0x6A}
+        )
+        await coord._async_query_firmware_version()
+        assert coord.firmware_version == "3.13"
+
+    async def test_firmware_version_none_on_no_response(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(return_value=None)
+        await coord._async_query_firmware_version()
+        assert coord.firmware_version is None
+
+    async def test_firmware_version_none_on_short_response(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(
+            return_value={"data": bytes(10), "func": 0x6A}
+        )
+        await coord._async_query_firmware_version()
+        assert coord.firmware_version is None
+
+    async def test_firmware_version_none_on_exception(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(side_effect=Exception("BLE error"))
+        await coord._async_query_firmware_version()
+        assert coord.firmware_version is None
+
+
+# ---------------------------------------------------------------------------
 # Heater coordinator — poll raises UpdateFailed on no response
 # ---------------------------------------------------------------------------
 
