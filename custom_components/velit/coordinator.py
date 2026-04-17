@@ -294,10 +294,34 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
         super().__init__(hass, entry, name=f"Velit Heater {entry.data['address']}")
         self._client = VelitHeaterClient(self.hass, self._address)
         self._unit_detected = False
+        # Populated on first successful poll via func 0x6A. Exposed as sw_version
+        # in DeviceInfo. None until queried; remains None if the query fails.
+        self.firmware_version: str | None = None
+
+    async def _async_query_firmware_version(self) -> None:
+        """Query device firmware version via func 0x6A and cache the result.
+
+        Response payload bytes [14:16] encode the version as a big-endian uint16
+        decimal integer: e.g. 0x0139 = 313 → "3.13". Confirmed on firmware 3.13
+        (single data point — encoding consistent with known decimal-integer convention).
+        Logs a warning and leaves firmware_version as None on any failure.
+        """
+        try:
+            rsp = await self._client.send_command(0x6A, bytes([0x01]))
+            if rsp is None or len(rsp.get("data", b"")) < 16:
+                _LOGGER.warning("Firmware version query (0x6A) returned no usable response")
+                return
+            val = int.from_bytes(rsp["data"][14:16], "big")
+            self.firmware_version = f"{val // 100}.{val % 100:02d}"
+            _LOGGER.debug("Heater %s: firmware version %s", self._address, self.firmware_version)
+        except Exception as exc:
+            _LOGGER.warning("Firmware version query (0x6A) failed: %s", exc)
 
     async def _async_update_data(self) -> dict:
         data = await super()._async_update_data()
         self._adjust_poll_interval(data.get("machine_state", 0))
+        if self.firmware_version is None:
+            await self._async_query_firmware_version()
         # Track cleaning cycle completion.
         # Only clear once the device has confirmed it left Standby (cycle started)
         # and then returned to Standby (cycle complete). If the device never leaves

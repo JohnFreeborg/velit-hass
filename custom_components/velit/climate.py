@@ -112,11 +112,6 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
         self._entry = entry
         self._attr_unique_id = f"{entry.data['address']}_climate"
         self._attr_name = entry.data.get(CONF_NAME, entry.data["address"])
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.data["address"])},
-            name=entry.data.get(CONF_NAME, entry.data["address"]),
-            manufacturer="Velit",
-        )
         # Optimistic hvac_mode written immediately after a command so the UI
         # reflects the expected state without waiting for the next poll.
         # Cleared once the coordinator confirms the new state, or when the
@@ -130,6 +125,17 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
     # ------------------------------------------------------------------
     # State properties — read from coordinator data, never from device
     # ------------------------------------------------------------------
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        # Evaluated on each state write so sw_version is populated as soon as
+        # the coordinator queries it on the first poll (initially None).
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.data["address"])},
+            name=self._entry.data.get(CONF_NAME, self._entry.data["address"]),
+            manufacturer="Velit",
+            sw_version=self.coordinator.firmware_version,
+        )
 
     @property
     def available(self) -> bool:
