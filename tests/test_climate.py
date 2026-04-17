@@ -171,10 +171,10 @@ class TestHeaterClimateState:
         entity, _ = _heater_entity(data=data)
         assert entity.hvac_action == HVACAction.FAN
 
-    def test_hvac_action_idle_when_standby(self):
+    def test_hvac_action_off_when_standby(self):
         data = {**_make_heater_coord().data, "machine_state": 0, "fault_code": 0}
         entity, _ = _heater_entity(data=data)
-        assert entity.hvac_action == HVACAction.IDLE
+        assert entity.hvac_action == HVACAction.OFF
 
     def test_hvac_action_off_when_fault_active(self):
         data = {**_make_heater_coord().data, "machine_state": 0, "fault_code": 1}
