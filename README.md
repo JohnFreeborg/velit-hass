@@ -11,9 +11,9 @@ sensors, and build automations on device state and fault conditions.
 
 | Device | Type | Tested | Firmware |
 |---|---|---|---|
-| Velit 4000P (fixed) | Heater | Yes | 3.62 |
+| Velit 4000P (fixed) | Heater | Yes | 3.13 / 3.26 / 3.62 |
 | Velit Portable | Heater | No | — |
-| Velit 2000R | AC | No | — |
+| Velit 2000R | AC | In progress | — |
 | Velit 2000R Mini | AC | No | — |
 | Velit 3000R | AC | No | — |
 | Velit 2000U | AC | No | — |
@@ -27,11 +27,17 @@ with the model and firmware version so the table can be updated.
 
 **Heater**
 - Power on/off, manual mode, and thermostat mode
-- Gear/fan speed control (levels 1–5)
+- Gear/fan speed control (levels 1–5) — not yet hardware-validated
 - Target temperature
-- Sensor entities: inlet temperature, casing temperature, outlet temperature, supply voltage, fan RPM, altitude
-- Fault code sensor with human-readable fault descriptions
-- Machine state sensor (standby, normal, cooling down, etc.)
+- Sensor entities: inlet temperature, altitude, fault code, machine state
+- Fault Active binary sensor — suitable for automations and dashboard cards
+- HA Repairs issue raised automatically on fault, with a link to the Velit error guide
+- BLE connection switch — release the device to the Velit mobile app without removing
+  the integration
+- Fuel pump prime switch — runs a 30-second prime cycle with auto-stop; companion
+  countdown sensor ticks in real time
+- Cleaning switch — initiates the residual fuel cleaning cycle and reflects cycle state
+- Firmware version shown in the HA device info panel
 - Bluetooth auto-discovery
 
 **Air Conditioner**
@@ -41,6 +47,9 @@ with the model and firmware version so the table can be updated.
 - Fan speed control (levels 1–5)
 - Swing control
 - Target temperature
+- Sensor entities: inlet temperature, fault code
+- BLE connection switch — release the device to the Velit mobile app without removing
+  the integration
 - Bluetooth auto-discovery
 
 ---
@@ -57,12 +66,15 @@ with the model and firmware version so the table can be updated.
 
 ### HACS (recommended)
 
+A pre-release beta is available via HACS as a custom repository:
+
 1. Open HACS in Home Assistant.
 2. Go to **Integrations** and click the three-dot menu in the top right.
 3. Select **Custom repositories**.
 4. Add `https://github.com/JohnFreeborg/velit-hass` with category **Integration**.
 5. Search for **Velit** in HACS and click **Download**.
-6. Restart Home Assistant.
+6. In the download dialog, enable **Show beta versions** and select the pre-release version.
+7. Restart Home Assistant.
 
 ### Manual
 
@@ -92,6 +104,19 @@ you to complete setup.
 
 ---
 
+## Options
+
+After setup, you can adjust per-device options from **Settings → Devices & Services →
+Velit → Configure**:
+
+- **Poll interval** — how often the integration queries the device (5–300 seconds,
+  default 30). The interval automatically drops to 5 seconds during active state
+  transitions and returns to the configured value once the device settles.
+- **Mark unavailable on fault** — when enabled, the climate entity becomes unavailable
+  while a fault code is active, preventing commands that the device would silently ignore.
+
+---
+
 ## Notes
 
 - The integration communicates directly with the device over Bluetooth. Your HA instance
@@ -99,8 +124,7 @@ you to complete setup.
 - The physical temperature display unit on the device (°C or °F) is preserved — the
   integration detects the current unit on connect and does not change it. Home Assistant
   handles display conversion based on your system preferences.
-- Poll interval is 30 seconds. Commands sent from HA take effect immediately and state
-  is refreshed straight after.
+- Commands sent from HA take effect immediately; state is refreshed straight after.
 
 ---
 
@@ -117,13 +141,21 @@ you to complete setup.
 - The device may be out of Bluetooth range or powered off.
 - If another app (e.g. the Velit mobile app) is connected to the device, the integration
   may not be able to connect. Disconnect the other app and reload the integration.
+- Use the **BLE Connection** switch on the device page to manually release or re-acquire
+  the Bluetooth connection.
 - Check the HA logs (Settings → System → Logs) for error details.
+
+**Heater takes a long time to turn off**
+- After a heat cycle ends, the heater runs a cooling-down cycle before shutting off
+  completely. This typically takes around 3 minutes and is normal device behaviour.
+  The climate card will reflect the cooling state during this period.
 
 **Fault sensor shows an error code**
 - Fault descriptions are listed on the device page in Home Assistant.
+- A Repairs issue is raised automatically with a link to the Velit error guide.
 - Refer to your device manual for guidance on each fault type.
-- You can build automations to alert on specific fault conditions using the Fault sensor
-  as a trigger.
+- You can build automations to alert on specific fault conditions using the Fault Active
+  binary sensor as a trigger.
 
 ---
 
@@ -132,4 +164,3 @@ you to complete setup.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for branching, commit, and testing guidelines.
 
 Issues and pull requests are welcome at https://github.com/JohnFreeborg/velit-hass
-
