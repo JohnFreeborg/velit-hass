@@ -22,3 +22,6 @@ build/
 .coverage
 htmlcov/
 coverage.xml
+
+# pyenv virtualenv management
+.python-version
