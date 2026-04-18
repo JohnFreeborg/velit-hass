@@ -5,6 +5,7 @@
 .claude/
 tools/*
 !tools/discover.py
+!tools/discover.md
 
 # Python bytecode
 __pycache__/
