@@ -57,7 +57,7 @@ from bleak.backends.scanner import AdvertisementData
 # BLE advertisement local name prefixes used by known Velit heater firmware.
 # AC units may advertise with different names (e.g. "LS Dis Server" observed
 # on a 2000R unit). The service UUID filter below is more reliable.
-_VELIT_NAME_PREFIXES = ("VELIT", "VLIT", "D30")
+_VELIT_NAME_PREFIXES = ("VELIT", "VLIT", "D30", "KT")
 
 # BEKEN Corp manufacturer ID (0x585A = 22618), present in known Velit heater
 # advertisements. Whether AC units share this ID is unconfirmed.
