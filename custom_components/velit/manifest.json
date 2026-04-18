@@ -6,7 +6,7 @@
     {"local_name": "VELIT*", "connectable": true},
     {"local_name": "VLIT*", "connectable": true},
     {"local_name": "D30*", "connectable": true},
-    {"local_name": "KT*", "connectable": true},
+    {"local_name": "KT2*", "connectable": true},
     {"manufacturer_id": 22618, "connectable": true},
     {"service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb", "connectable": true}
   ],

@@ -44,7 +44,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # BLE advertisement name prefixes that identify Velit devices, matching the
 # manifest.json bluetooth matchers.
-_VELIT_NAME_PREFIXES = ("VELIT", "VLIT", "D30", "KT")
+_VELIT_NAME_PREFIXES = ("VELIT", "VLIT", "D30", "KT2")
 
 # BEKEN Corp manufacturer ID (0x585A = 22618), present in all known Velit
 # advertisements. Some firmware versions advertise with the MAC as the local
