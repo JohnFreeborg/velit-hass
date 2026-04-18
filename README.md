@@ -73,7 +73,7 @@ A pre-release beta is available via HACS as a custom repository:
 3. Select **Custom repositories**.
 4. Add `https://github.com/JohnFreeborg/velit-hass` with category **Integration**.
 5. Search for **Velit** in HACS and click **Download**.
-6. When prompted, select the pre-release version to install from the `dev` branch.
+6. In the download dialog, enable **Show beta versions** and select the pre-release version.
 7. Restart Home Assistant.
 
 ### Manual
