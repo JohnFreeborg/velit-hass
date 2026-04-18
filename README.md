@@ -27,7 +27,7 @@ with the model and firmware version so the table can be updated.
 
 **Heater**
 - Power on/off, manual mode, and thermostat mode
-- Gear/fan speed control (levels 1–5)
+- Gear/fan speed control (levels 1–5) — not yet hardware-validated
 - Target temperature
 - Sensor entities: inlet temperature, altitude, fault code, machine state
 - Fault Active binary sensor — suitable for automations and dashboard cards
