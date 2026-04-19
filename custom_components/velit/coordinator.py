@@ -452,6 +452,10 @@ class VelitACCoordinator(_VelitBaseCoordinator):
         super().__init__(hass, entry, name=f"Velit AC {entry.data['address']}")
         self._client = VelitACClient(self.hass, self._address)
         self._unit_detected = False
+        # Documented, but have not gotten any response to firmware query on any AC unit
+        # we've tested yet. Exposed as sw_version
+        # in DeviceInfo. None until queried; remains None if the query fails.
+        self.firmware_version: str | None = None
 
     async def _async_update_data(self) -> dict:
         data = await super()._async_update_data()

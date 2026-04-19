@@ -349,7 +349,9 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
             identifiers={(DOMAIN, entry.data["address"])},
             name=entry.data.get(CONF_NAME, entry.data["address"]),
             manufacturer="Velit",
+            sw_version=self.coordinator.firmware_version
         )
+
         # Tracks the last non-preset HVAC mode so we can restore it when
         # clearing a preset (protocol requires resending the base mode code).
         self._last_hvac_mode: HVACMode = HVACMode.COOL
