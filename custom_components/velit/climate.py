@@ -37,7 +37,7 @@ from .const import (
     AC_MIN_TEMP_C,
 )
 from .coordinator import VelitACCoordinator, VelitHeaterCoordinator
-from .packet_utils import celsius_to_fahrenheit
+from .packet_utils import celsius_to_fahrenheit, fahrenheit_to_celsius
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,8 +96,17 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
     _attr_preset_modes = ["Auto", "Manual"]
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 1.0
-    _attr_min_temp = float(HEATER_MIN_TEMP_C)
-    _attr_max_temp = float(HEATER_MAX_TEMP_C)
+    @property
+    def min_temp(self) -> float:
+        if self.coordinator.temp_unit == UnitOfTemperature.FAHRENHEIT:
+            return fahrenheit_to_celsius(40)
+        return float(HEATER_MIN_TEMP_C)
+
+    @property
+    def max_temp(self) -> float:
+        if self.coordinator.temp_unit == UnitOfTemperature.FAHRENHEIT:
+            return fahrenheit_to_celsius(99)
+        return float(HEATER_MAX_TEMP_C)
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
         | ClimateEntityFeature.PRESET_MODE
