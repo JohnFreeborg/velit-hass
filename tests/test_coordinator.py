@@ -180,6 +180,33 @@ class TestVelitHeaterCoordinatorParse:
         assert data["outlet_temp_c"] is None
         assert data["altitude"] is None
 
+    def test_altitude_implausible_returns_none_fahrenheit(self):
+        """Non-0xFFFF garbage values above the ceiling must be filtered."""
+        q2 = bytearray(Q2_DATA)
+        q2[11] = 0x80  # 0x8001 = 32769 ft — above _MAX_ALTITUDE_FT (30000)
+        q2[12] = 0x01
+        coord = self._make_coord()
+        data = coord._parse(Q1_DATA_F, bytes(q2))
+        assert data["altitude"] is None
+
+    def test_altitude_implausible_returns_none_celsius(self):
+        q2 = bytearray(Q2_DATA)
+        q2[11] = 0x27  # 0x2711 = 10001 m — above _MAX_ALTITUDE_M (9000)
+        q2[12] = 0x11
+        coord = self._make_coord()
+        # Force Celsius mode by using Q1_DATA_C
+        data = coord._parse(Q1_DATA_C, bytes(q2))
+        assert data["altitude"] is None
+
+    def test_altitude_at_ceiling_is_valid(self):
+        """Values exactly at the bound must pass through."""
+        q2 = bytearray(Q2_DATA)
+        q2[11] = 0x23  # 0x2328 = 9000 m exactly
+        q2[12] = 0x28
+        coord = self._make_coord()
+        data = coord._parse(Q1_DATA_C, bytes(q2))
+        assert data["altitude"] == 9000
+
     def test_gear_and_work_mode(self):
         coord = self._make_coord()
         data = coord._parse(Q1_DATA_F, Q2_DATA)

@@ -51,6 +51,13 @@ _CELSIUS_SETPOINT_MAX = 37
 _FAHRENHEIT_SETPOINT_MIN = 40
 _FAHRENHEIT_SETPOINT_MAX = 99
 
+# Maximum plausible altitude per unit. Values above these indicate an
+# uninitialized or garbage sensor reading and are reported as None.
+# Bounds are deliberately generous (well above Everest) to avoid masking
+# legitimate high-altitude use while still filtering device startup glitches.
+_MAX_ALTITUDE_M = 9000   # metres — above Everest (8849 m)
+_MAX_ALTITUDE_FT = 30000 # feet   — above Everest (29032 ft)
+
 # Heater fault codes from protocol V1.02.
 HEATER_FAULT_CODES: dict[int, str] = {
     0: "No Fault",
@@ -80,6 +87,19 @@ HEATER_MACHINE_STATES: dict[int, str] = {
     4: "Cleaning",
     5: "Clean Complete",
 }
+
+
+def _validate_altitude(raw: int, unit: str) -> int | None:
+    """Return raw altitude if plausible, else None.
+
+    Filters the 0xFFFF unavailable sentinel and values above a generous
+    ceiling that no camping heater could realistically report. Startup glitches
+    sometimes produce large non-sentinel values before the sensor initialises.
+    """
+    if raw == 0xFFFF:
+        return None
+    max_alt = _MAX_ALTITUDE_FT if unit == UnitOfTemperature.FAHRENHEIT else _MAX_ALTITUDE_M
+    return raw if raw <= max_alt else None
 
 
 class _VelitBaseCoordinator(DataUpdateCoordinator):
@@ -426,7 +446,7 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
             "inlet_temp_c": self.to_celsius(inlet_native) if inlet_native is not None else None,
             "casing_temp_c": self.to_celsius(casing_native) if casing_native is not None else None,
             "outlet_temp_c": self.to_celsius(outlet_native) if outlet_native is not None else None,
-            "altitude": alt_raw if alt_raw != 0xFFFF else None,
+            "altitude": _validate_altitude(alt_raw, self.temp_unit),
         }
 
 
