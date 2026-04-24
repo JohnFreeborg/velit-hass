@@ -442,7 +442,6 @@ class VelitACCoordinator(_VelitBaseCoordinator):
       mode              int     — current operation mode code (see AC protocol 0x02)
       set_temp_c        float   — current setpoint in Celsius
       fan_speed         int     — current fan speed 1–5
-      swing             int     — 1 = swinging, 2 = stopped (raw device value)
       inlet_temp_c      float | None  — inlet air temperature in Celsius (raw byte = °C)
       fault_code        int     — raw fault code (0 = no fault)
       fault_name        str     — human-readable fault description
@@ -477,10 +476,6 @@ class VelitACCoordinator(_VelitBaseCoordinator):
         if fan_rsp is None:
             raise UpdateFailed("No response to fan speed query (0x04)")
 
-        swing_rsp = await self._client.send_command(0x10, bytes([0x00]))
-        if swing_rsp is None:
-            raise UpdateFailed("No response to swing query (0x10)")
-
         # Inlet temp and fault: do not raise on failure — device may not respond
         # to these while powered off.
         inlet_rsp = await self._client.send_command(0x07, bytes([0x00]))
@@ -508,7 +503,6 @@ class VelitACCoordinator(_VelitBaseCoordinator):
             "mode": mode_rsp["data"][0],
             "set_temp_c": self.to_celsius(set_temp_raw),
             "fan_speed": fan_rsp["data"][0],
-            "swing": swing_rsp["data"][0],
             "inlet_temp_c": inlet_temp_c,
             "fault_code": fault_code,
             "fault_name": fault_name,
