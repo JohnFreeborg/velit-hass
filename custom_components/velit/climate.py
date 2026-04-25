@@ -424,6 +424,33 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
             return None
         return str(self.coordinator.data["fan_speed"])
 
+    @property
+    def hvac_action(self) -> HVACAction | None:
+        """Current action shown on the climate tile.
+
+        Derived from power state and mode — the AC protocol provides no
+        dedicated active/idle signal, so this reflects the configured mode
+        rather than whether the compressor is actively cycling.
+        """
+        if self.coordinator.data is None:
+            return None
+        if self.coordinator.data.get("fault_code", 0) != 0:
+            return HVACAction.OFF
+        if self.coordinator.data.get("power") == 0x01:
+            return HVACAction.OFF
+        mode_code = self.coordinator.data["mode"]
+        # Preset codes don't carry their own action — resolve from last base mode.
+        if mode_code in self._PRESET_CODES:
+            base = self._last_hvac_mode
+        else:
+            base = self._MODE_TO_HVAC.get(mode_code, self._last_hvac_mode)
+        if base == HVACMode.COOL:
+            return HVACAction.COOLING
+        if base == HVACMode.FAN_ONLY:
+            return HVACAction.FAN
+        return HVACAction.IDLE
+
+
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if hvac_mode == HVACMode.OFF:
             await self.coordinator._client.send_command(0x01, bytes([0x01]))

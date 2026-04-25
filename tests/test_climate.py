@@ -333,6 +333,48 @@ class TestACClimateState:
 
 
 # ---------------------------------------------------------------------------
+# AC — hvac_action
+# ---------------------------------------------------------------------------
+
+
+class TestACClimateAction:
+    def test_action_off_when_powered_off(self):
+        data = {**_make_ac_coord().data, "power": 0x01}
+        entity, _ = _ac_entity(data=data)
+        assert entity.hvac_action == HVACAction.OFF
+
+    def test_action_off_when_fault_active(self):
+        data = {**_make_ac_coord().data, "fault_code": 1}
+        entity, _ = _ac_entity(data=data)
+        assert entity.hvac_action == HVACAction.OFF
+
+    def test_action_cooling_in_cool_mode(self):
+        entity, _ = _ac_entity()  # default: on, mode=1 (cool)
+        assert entity.hvac_action == HVACAction.COOLING
+
+    def test_action_fan_in_fan_mode(self):
+        data = {**_make_ac_coord().data, "mode": 3}
+        entity, _ = _ac_entity(data=data)
+        assert entity.hvac_action == HVACAction.FAN
+
+    def test_action_fan_in_vent_mode(self):
+        data = {**_make_ac_coord().data, "mode": 8}
+        entity, _ = _ac_entity(data=data)
+        assert entity.hvac_action == HVACAction.FAN
+
+    def test_action_none_when_no_data(self):
+        entity, _ = _ac_entity(data=None)
+        assert entity.hvac_action is None
+
+    def test_action_uses_last_hvac_mode_during_preset(self):
+        # Preset active (energy saving, mode=4) — action resolves from last base mode.
+        data = {**_make_ac_coord().data, "mode": 4}
+        entity, _ = _ac_entity(data=data)
+        entity._last_hvac_mode = HVACMode.COOL
+        assert entity.hvac_action == HVACAction.COOLING
+
+
+# ---------------------------------------------------------------------------
 # AC — optimistic state
 # ---------------------------------------------------------------------------
 
