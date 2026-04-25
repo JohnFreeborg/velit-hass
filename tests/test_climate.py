@@ -278,11 +278,6 @@ class TestACClimateState:
         entity, _ = _ac_entity(data=data)
         assert entity.hvac_mode == HVACMode.OFF
 
-    def test_hvac_mode_dry(self):
-        data = {**_make_ac_coord().data, "mode": 7}
-        entity, _ = _ac_entity(data=data)
-        assert entity.hvac_mode == HVACMode.DRY
-
     def test_preset_none_for_base_modes(self):
         entity, _ = _ac_entity()
         assert entity.preset_mode == AC_PRESET_NONE
@@ -305,11 +300,6 @@ class TestACClimateState:
     def test_fan_mode(self):
         entity, _ = _ac_entity()
         assert entity.fan_mode == "3"
-
-    def test_hvac_mode_heat(self):
-        data = {**_make_ac_coord().data, "mode": 2}
-        entity, _ = _ac_entity(data=data)
-        assert entity.hvac_mode == HVACMode.HEAT
 
     def test_hvac_mode_fan_only(self):
         data = {**_make_ac_coord().data, "mode": 3}
@@ -351,24 +341,24 @@ class TestACClimateOptimistic:
     def test_optimistic_hvac_mode_returned_immediately(self):
         entity, coord = _ac_entity()
         # Set optimistic before coordinator confirms.
-        entity._optimistic_hvac_mode = HVACMode.HEAT
+        entity._optimistic_hvac_mode = HVACMode.FAN_ONLY
         coord._post_command_fast_polls = 3
-        assert entity.hvac_mode == HVACMode.HEAT
+        assert entity.hvac_mode == HVACMode.FAN_ONLY
 
     def test_optimistic_hvac_mode_clears_when_confirmed(self):
-        # Coordinator data already shows HEAT — optimistic agrees, so it clears.
-        data = {**_make_ac_coord().data, "mode": 2}
+        # Coordinator data already shows FAN_ONLY — optimistic agrees, so it clears.
+        data = {**_make_ac_coord().data, "mode": 3}
         entity, coord = _ac_entity(data=data)
-        entity._optimistic_hvac_mode = HVACMode.HEAT
+        entity._optimistic_hvac_mode = HVACMode.FAN_ONLY
         coord._post_command_fast_polls = 3
         result = entity.hvac_mode
-        assert result == HVACMode.HEAT
+        assert result == HVACMode.FAN_ONLY
         assert entity._optimistic_hvac_mode is None
 
     def test_optimistic_hvac_mode_clears_when_fast_polls_exhausted(self):
         # Fast poll window expired without confirmation — revert to actual.
         entity, coord = _ac_entity()  # actual = COOL (mode=1)
-        entity._optimistic_hvac_mode = HVACMode.HEAT
+        entity._optimistic_hvac_mode = HVACMode.FAN_ONLY
         coord._post_command_fast_polls = 0
         result = entity.hvac_mode
         assert result == HVACMode.COOL
@@ -410,11 +400,6 @@ class TestACClimateActions:
         assert calls[0].args == (0x01, bytes([0x02]))
         assert calls[1].args == (0x02, bytes([0x01]))
 
-    async def test_set_hvac_dry(self):
-        entity, coord = _ac_entity()
-        await entity.async_set_hvac_mode(HVACMode.DRY)
-        coord._client.send_command.assert_called_once_with(0x02, bytes([0x07]))
-
     async def test_set_preset_energy_saving(self):
         entity, coord = _ac_entity()
         await entity.async_set_preset_mode(AC_PRESET_ENERGY_SAVING)
@@ -422,9 +407,9 @@ class TestACClimateActions:
 
     async def test_set_preset_none_restores_last_mode(self):
         entity, coord = _ac_entity()
-        entity._last_hvac_mode = HVACMode.HEAT
+        entity._last_hvac_mode = HVACMode.FAN_ONLY
         await entity.async_set_preset_mode(AC_PRESET_NONE)
-        coord._client.send_command.assert_called_once_with(0x02, bytes([0x02]))
+        coord._client.send_command.assert_called_once_with(0x02, bytes([0x03]))
 
     async def test_set_temperature_celsius(self):
         entity, coord = _ac_entity(temp_unit=UnitOfTemperature.CELSIUS)
@@ -470,11 +455,11 @@ class TestACClimateActions:
     async def test_turn_on_restores_last_hvac_mode(self):
         # Device is off; async_turn_on should power on and restore last mode.
         entity, coord = _ac_entity(data={**_make_ac_coord().data, "power": 0x01})
-        entity._last_hvac_mode = HVACMode.HEAT
+        entity._last_hvac_mode = HVACMode.FAN_ONLY
         await entity.async_turn_on()
         calls = coord._client.send_command.call_args_list
-        assert calls[0].args == (0x01, bytes([0x02]))   # power on
-        assert calls[1].args == (0x02, bytes([0x02]))   # HEAT = 0x02
+        assert calls[0].args == (0x01, bytes([0x02]))      # power on
+        assert calls[1].args == (0x02, bytes([0x03]))      # FAN_ONLY = 0x03
 
 
 # ---------------------------------------------------------------------------

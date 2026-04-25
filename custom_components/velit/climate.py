@@ -47,12 +47,10 @@ _HEATER_MODE_THERMOSTAT = 2
 
 # AC operation mode codes (func 0x02).
 _AC_MODE_COOL = 1
-_AC_MODE_HEAT = 2
 _AC_MODE_FAN = 3
 _AC_MODE_ENERGY_SAVING = 4
 _AC_MODE_SLEEP = 5
 _AC_MODE_TURBO = 6
-_AC_MODE_DEHUMIDIFY = 7
 _AC_MODE_VENT = 8
 
 # Preset names used in HA for AC modes that don't map directly to HVACMode.
@@ -308,9 +306,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
     HVAC modes:
       OFF       — power off (func 0x01, data 0x01)
       COOL      — cooling mode
-      HEAT      — heating mode
       FAN_ONLY  — fan mode and vent mode both map here (protocols 0x03 and 0x08)
-      DRY       — dehumidify mode
 
     Presets (active within the current HVAC mode):
       none           — standard operation
@@ -322,7 +318,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
     functional difference between them is unconfirmed without hardware testing.
     """
 
-    _attr_hvac_modes = [HVACMode.OFF, HVACMode.COOL, HVACMode.HEAT, HVACMode.FAN_ONLY, HVACMode.DRY]
+    _attr_hvac_modes = [HVACMode.OFF, HVACMode.COOL, HVACMode.FAN_ONLY]
     _attr_preset_modes = [AC_PRESET_NONE, AC_PRESET_ENERGY_SAVING, AC_PRESET_SLEEP, AC_PRESET_TURBO]
     _attr_fan_modes = FAN_MODES
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
@@ -340,10 +336,8 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
     # Map from AC protocol mode codes to HA HVACMode.
     _MODE_TO_HVAC: dict[int, HVACMode] = {
         _AC_MODE_COOL: HVACMode.COOL,
-        _AC_MODE_HEAT: HVACMode.HEAT,
         _AC_MODE_FAN: HVACMode.FAN_ONLY,
         _AC_MODE_VENT: HVACMode.FAN_ONLY,   # unconfirmed; see class docstring
-        _AC_MODE_DEHUMIDIFY: HVACMode.DRY,
     }
 
     # Preset mode codes — these modify the current HVAC mode rather than replacing it.
@@ -439,9 +433,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
                 await self.coordinator._client.send_command(0x01, bytes([0x02]))
             mode_map = {
                 HVACMode.COOL: _AC_MODE_COOL,
-                HVACMode.HEAT: _AC_MODE_HEAT,
                 HVACMode.FAN_ONLY: _AC_MODE_FAN,
-                HVACMode.DRY: _AC_MODE_DEHUMIDIFY,
             }
             code = mode_map.get(hvac_mode)
             if code is not None:
@@ -456,9 +448,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
             # Restore the last base HVAC mode.
             mode_map = {
                 HVACMode.COOL: _AC_MODE_COOL,
-                HVACMode.HEAT: _AC_MODE_HEAT,
                 HVACMode.FAN_ONLY: _AC_MODE_FAN,
-                HVACMode.DRY: _AC_MODE_DEHUMIDIFY,
             }
             code = mode_map.get(self._last_hvac_mode, _AC_MODE_COOL)
             await self.coordinator._client.send_command(0x02, bytes([code]))
