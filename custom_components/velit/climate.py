@@ -98,6 +98,7 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
     _attr_fan_modes = FAN_MODES
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 1.0
+    _attr_translation_key = "heater"
 
     @property
     def supported_features(self) -> ClimateEntityFeature:
@@ -323,6 +324,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
     _attr_fan_modes = FAN_MODES
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 1.0
+    _attr_translation_key = "ac"
     _attr_min_temp = float(AC_MIN_TEMP_C)
     _attr_max_temp = float(AC_MAX_TEMP_C)
     _attr_supported_features = (

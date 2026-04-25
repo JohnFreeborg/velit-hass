@@ -63,6 +63,22 @@
     }
   },
   "entity": {
+    "climate": {
+      "heater": {
+        "state_attributes": {
+          "fan_mode": {
+            "name": "Fan Level"
+          }
+        }
+      },
+      "ac": {
+        "state_attributes": {
+          "fan_mode": {
+            "name": "Fan Level"
+          }
+        }
+      }
+    },
     "button": {
       "cleaning": {
         "name": "Cleaning"
