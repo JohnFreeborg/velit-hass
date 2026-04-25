@@ -54,10 +54,10 @@ _AC_MODE_TURBO = 6
 _AC_MODE_VENT = 8
 
 # Preset names used in HA for AC modes that don't map directly to HVACMode.
-AC_PRESET_NONE = "none"
-AC_PRESET_ENERGY_SAVING = "energy_saving"
-AC_PRESET_SLEEP = "sleep"
-AC_PRESET_TURBO = "turbo"
+AC_PRESET_NONE = "Cooling"
+AC_PRESET_ENERGY_SAVING = "Eco"
+AC_PRESET_SLEEP = "Sleep"
+AC_PRESET_TURBO = "Turbo"
 
 # Fan modes exposed to HA — string labels matching gear/speed numbers.
 FAN_MODES = ["1", "2", "3", "4", "5"]
@@ -396,6 +396,8 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
     @property
     def preset_mode(self) -> str | None:
         if self.coordinator.data is None:
+            return None
+        if self.hvac_mode != HVACMode.COOL:
             return None
         mode_code = self.coordinator.data["mode"]
         actual = self._PRESET_CODES.get(mode_code, AC_PRESET_NONE)
