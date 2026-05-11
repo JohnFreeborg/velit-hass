@@ -306,6 +306,11 @@ class TestACClimateState:
         entity, _ = _ac_entity(data=data)
         assert entity.hvac_mode == HVACMode.FAN_ONLY
 
+    def test_preset_none_in_fan_only_mode(self):
+        data = {**_make_ac_coord().data, "mode": 3}
+        entity, _ = _ac_entity(data=data)
+        assert entity.preset_mode is None
+
     def test_hvac_mode_none_when_no_data(self):
         entity, _ = _ac_entity(data=None)
         assert entity.hvac_mode is None

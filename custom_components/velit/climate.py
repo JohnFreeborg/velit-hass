@@ -54,10 +54,10 @@ _AC_MODE_TURBO = 6
 _AC_MODE_VENT = 8
 
 # Preset names used in HA for AC modes that don't map directly to HVACMode.
-AC_PRESET_NONE = "none"
-AC_PRESET_ENERGY_SAVING = "energy_saving"
-AC_PRESET_SLEEP = "sleep"
-AC_PRESET_TURBO = "turbo"
+AC_PRESET_NONE = "Cooling"
+AC_PRESET_ENERGY_SAVING = "Eco"
+AC_PRESET_SLEEP = "Sleep"
+AC_PRESET_TURBO = "Turbo"
 
 # Fan modes exposed to HA — string labels matching gear/speed numbers.
 FAN_MODES = ["1", "2", "3", "4", "5"]
@@ -98,6 +98,7 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
     _attr_fan_modes = FAN_MODES
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 1.0
+    _attr_translation_key = "heater"
 
     @property
     def supported_features(self) -> ClimateEntityFeature:
@@ -323,6 +324,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
     _attr_fan_modes = FAN_MODES
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 1.0
+    _attr_translation_key = "ac"
     _attr_min_temp = float(AC_MIN_TEMP_C)
     _attr_max_temp = float(AC_MAX_TEMP_C)
     _attr_supported_features = (
@@ -396,6 +398,8 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
     @property
     def preset_mode(self) -> str | None:
         if self.coordinator.data is None:
+            return None
+        if self.hvac_mode != HVACMode.COOL:
             return None
         mode_code = self.coordinator.data["mode"]
         actual = self._PRESET_CODES.get(mode_code, AC_PRESET_NONE)
