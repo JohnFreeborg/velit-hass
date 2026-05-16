@@ -7,9 +7,25 @@ sensors, and build automations on device state and fault conditions.
 
 Why use this instead of the phone app?
 * Stays connected to each device (no more having to choose and connect frequently)
-* Automatic history logging very helpful for troubleshooting or understanding power/time/temperature trade offs
-* Can control and monitor either AC or heater without having to disconnect/reconnect to the other device
-* Home Assistant dashboard on the phone is handier and more convenient than isolated phone app
+* Automatic history logging for troubleshooting and understanding power/time/temperature trade offs
+* Can control and monitor both AC and heater without having to disconnect/reconnect to the 'other device'
+* Home Assistant dashboard on the phone is more convenient than isolated phone app
+
+---
+
+> [!WARNING]
+> **Read this before proceeding.**
+>
+> This project involves interfacing with a **combustion heater** that produces **open flame, high heat, and carbon monoxide**. Improper installation, software faults, or loss of communication between the controller and heater can result in **fire, carbon monoxide poisoning, serious injury, or death**.
+>
+> **By using any part of this project — code, documentation, or captures — you accept full and sole responsibility for your implementation, installation, and any consequences that result.** The author(s) of this project provide it as-is, with no warranty of any kind, expressed or implied. This project is not affiliated with VELIT Cooling & Heating, LLC or any related entity.
+>
+> **Minimum precautions you should take:**
+> - Install a working CO detector in any enclosed space where the heater operates
+> - Never leave a combustion heater running unattended without independent safety mechanisms (CO detector, thermal cutoff, smoke alarm)
+> - Test all control and shutdown paths thoroughly before relying on this system
+> - Retain the ability to cut heater power independently of this controller at all times
+> - Consult a qualified installer if you are uncertain about any aspect of the wiring or installation
 
 ---
 
@@ -27,22 +43,6 @@ Why use this instead of the phone app?
 
 If you have tested this integration on a device not listed above, please open an issue
 with the model and firmware version so the table can be updated.
-
----
-
-> [!WARNING]
-> **Read this before proceeding.**
->
-> This project involves interfacing with a **combustion heater** that produces **open flame, high heat, and carbon monoxide**. Improper installation, software faults, or loss of communication between the controller and heater can result in **fire, carbon monoxide poisoning, serious injury, or death**.
->
-> **By using any part of this project — code, documentation, or captures — you accept full and sole responsibility for your implementation, installation, and any consequences that result.** The author(s) of this project provide it as-is, with no warranty of any kind, expressed or implied. This project is not affiliated with VELIT Cooling & Heating, LLC or any related entity.
->
-> **Minimum precautions you should take:**
-> - Install a working CO detector in any enclosed space where the heater operates
-> - Never leave a combustion heater running unattended without independent safety mechanisms (CO detector, thermal cutoff, smoke alarm)
-> - Test all control and shutdown paths thoroughly before relying on this system
-> - Retain the ability to cut heater power independently of this controller at all times
-> - Consult a qualified installer if you are uncertain about any aspect of the wiring or installation
 
 ---
 
