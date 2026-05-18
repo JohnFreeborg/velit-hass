@@ -192,8 +192,8 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
     def to_celsius(self, value: float) -> float:
         """Convert a value in the device's active unit to Celsius for HA reporting."""
         if self.temp_unit == UnitOfTemperature.FAHRENHEIT:
-            return fahrenheit_to_celsius(value)
-        return float(value)
+            return round(fahrenheit_to_celsius(value), 1)
+        return round(float(value), 1)
 
     def _adjust_poll_interval(self, machine_state: int) -> None:
         """Switch to fast polling during active state transitions, restore when settled.
@@ -417,8 +417,8 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
                 return None
             # Protocol offset encoding: raw - 50 = °C, raw - 60 = °F.
             if self.temp_unit == UnitOfTemperature.FAHRENHEIT:
-                return round(float(raw - 60), 1)
-            return round(float(raw - 50), 1)
+                return float(raw - 60)
+            return float(raw - 50)
 
         voltage_raw = _read_u16(q2_data, 1)   # offset 0 = fault byte, skip
         fan_raw = _read_u16(q2_data, 3)
