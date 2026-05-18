@@ -417,8 +417,8 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
                 return None
             # Protocol offset encoding: raw - 50 = °C, raw - 60 = °F.
             if self.temp_unit == UnitOfTemperature.FAHRENHEIT:
-                return float(raw - 60)
-            return float(raw - 50)
+                return round(float(raw - 60), 1)
+            return round(float(raw - 50), 1)
 
         voltage_raw = _read_u16(q2_data, 1)   # offset 0 = fault byte, skip
         fan_raw = _read_u16(q2_data, 3)
