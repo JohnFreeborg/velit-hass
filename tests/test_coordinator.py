@@ -499,3 +499,33 @@ class TestFaultIssueRegistry:
             coord._update_fault_issue(data)
             placeholders = mock_create.call_args.kwargs["translation_placeholders"]
             assert placeholders["fault_code_display"] == "E01"
+
+
+# ---------------------------------------------------------------------------
+# Payload length validation
+# ---------------------------------------------------------------------------
+
+
+class TestHeaterParsePayloadValidation:
+    """Short (but checksum-valid) payloads must fail cleanly, not IndexError."""
+
+    def _coordinator(self):
+        hass = _make_hass()
+        entry = _make_entry()
+        with patch("custom_components.velit.coordinator.VelitHeaterClient"):
+            return VelitHeaterCoordinator(hass, entry)
+
+    def test_short_q1_raises_update_failed(self):
+        coord = self._coordinator()
+        with pytest.raises(UpdateFailed):
+            coord._parse(bytes([0x00]), Q2_DATA)
+
+    def test_short_q2_raises_update_failed(self):
+        coord = self._coordinator()
+        with pytest.raises(UpdateFailed):
+            coord._parse(Q1_DATA_C, bytes([0x00, 0x01]))
+
+    def test_exact_length_payloads_parse(self):
+        coord = self._coordinator()
+        data = coord._parse(Q1_DATA_C, Q2_DATA)
+        assert data["fault_code"] == 0
