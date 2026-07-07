@@ -151,9 +151,16 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
         self._prime_tick_callbacks.append(callback)
 
     def _notify_prime_tick(self) -> None:
-        """Notify all registered prime tick listeners (e.g. countdown sensor)."""
+        """Notify all registered prime tick listeners (e.g. countdown sensor).
+
+        A listener that has already been removed from HA (e.g. during entry
+        unload) must not prevent the remaining listeners from updating.
+        """
         for cb in self._prime_tick_callbacks:
-            cb()
+            try:
+                cb()
+            except Exception as exc:
+                _LOGGER.debug("Prime tick listener failed: %s", exc)
 
     def start_cleaning(self) -> None:
         """Mark a cleaning cycle as initiated and reset confirmation tracking."""
@@ -317,6 +324,9 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
         # Populated on first successful poll via func 0x6A. Exposed as sw_version
         # in DeviceInfo. None until queried; remains None if the query fails.
         self.firmware_version: str | None = None
+        # Firmware that does not answer 0x6A would otherwise be re-queried (and
+        # re-warned about) on every poll cycle forever.
+        self._fw_query_attempts = 0
 
     async def _async_query_firmware_version(self) -> None:
         """Query device firmware version via func 0x6A and cache the result.
@@ -325,7 +335,10 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
         decimal integer: e.g. 0x0139 = 313 → "3.13". Confirmed on firmware 3.13
         (single data point — encoding consistent with known decimal-integer convention).
         Logs a warning and leaves firmware_version as None on any failure.
+        Gives up after 3 attempts — some firmware never answers 0x6A and
+        re-querying every poll cycle only produces log spam.
         """
+        self._fw_query_attempts += 1
         try:
             rsp = await self._client.send_command(0x6A, bytes([0x01]))
             if rsp is None or len(rsp.get("data", b"")) < 16:
@@ -340,7 +353,7 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
     async def _async_update_data(self) -> dict:
         data = await super()._async_update_data()
         self._adjust_poll_interval(data.get("machine_state", 0))
-        if self.firmware_version is None:
+        if self.firmware_version is None and self._fw_query_attempts < 3:
             await self._async_query_firmware_version()
         # Track cleaning cycle completion.
         # Only clear once the device has confirmed it left Standby (cycle started)
@@ -382,7 +395,17 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
         return self._parse(q1["data"], q2["data"])
 
     def _parse(self, q1_data: bytes, q2_data: bytes) -> dict:
-        """Parse Query 1 and Query 2 data payloads into a normalised data dict."""
+        """Parse Query 1 and Query 2 data payloads into a normalised data dict.
+
+        Raises UpdateFailed if either payload is shorter than its documented
+        layout — parse_response only validates framing and checksum, not that
+        the data section is long enough for these specific queries.
+        """
+        if len(q1_data) < 7:
+            raise UpdateFailed(f"Query 1 payload too short: {len(q1_data)} bytes (expected 7)")
+        if len(q2_data) < 13:
+            raise UpdateFailed(f"Query 2 payload too short: {len(q2_data)} bytes (expected 13)")
+
         # Query 1 layout: [fault][work_mode][gear][set_temp][machine_state][power][pump_freq]
         fault_code = q1_data[0]
         work_mode = q1_data[1]
