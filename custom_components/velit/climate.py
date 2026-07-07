@@ -274,6 +274,11 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
         await self.coordinator.async_request_refresh()
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
+        # Service calls bypass the UI selector — never transmit a gear the
+        # device does not define.
+        if fan_mode not in FAN_MODES:
+            _LOGGER.warning("Ignoring invalid fan mode %r — must be one of %s", fan_mode, FAN_MODES)
+            return
         await self.coordinator._client.send_command(0x07, bytes([int(fan_mode)]))
         self.coordinator._post_command_fast_polls = 6
         await self.coordinator.async_request_refresh()
@@ -290,11 +295,19 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
         temp_c = kwargs.get("temperature")
         if temp_c is None:
             return
+        # Service calls bypass the UI slider — clamp to the device range so an
+        # out-of-range value can never be transmitted to the burner controller.
+        clamped = min(max(float(temp_c), self.min_temp), self.max_temp)
+        if clamped != temp_c:
+            _LOGGER.warning(
+                "Requested temperature %s°C outside device range %s–%s°C — clamped to %s°C",
+                temp_c, self.min_temp, self.max_temp, clamped,
+            )
         # Send in the device's active unit to avoid flipping the LCD display unit.
         if self.coordinator.temp_unit == UnitOfTemperature.FAHRENHEIT:
-            value = round(celsius_to_fahrenheit(temp_c))
+            value = round(celsius_to_fahrenheit(clamped))
         else:
-            value = round(temp_c)
+            value = round(clamped)
         await self.coordinator._client.send_command(0x08, bytes([value]))
         self.coordinator._post_command_fast_polls = 6
         await self.coordinator.async_request_refresh()
@@ -501,15 +514,28 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
         temp_c = kwargs.get("temperature")
         if temp_c is None:
             return
+        # Service calls bypass the UI slider — clamp to the device range so an
+        # out-of-range value can never be transmitted to the device.
+        clamped = min(max(float(temp_c), self.min_temp), self.max_temp)
+        if clamped != temp_c:
+            _LOGGER.warning(
+                "Requested temperature %s°C outside device range %s–%s°C — clamped to %s°C",
+                temp_c, self.min_temp, self.max_temp, clamped,
+            )
         if self.coordinator.temp_unit == UnitOfTemperature.FAHRENHEIT:
-            value = round(celsius_to_fahrenheit(temp_c))
+            value = round(celsius_to_fahrenheit(clamped))
         else:
-            value = round(temp_c)
+            value = round(clamped)
         await self.coordinator._client.send_command(0x03, bytes([value]))
         self.coordinator._post_command_fast_polls = 6
         await self.coordinator.async_request_refresh()
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
+        # Service calls bypass the UI selector — never transmit a speed the
+        # device does not define.
+        if fan_mode not in FAN_MODES:
+            _LOGGER.warning("Ignoring invalid fan mode %r — must be one of %s", fan_mode, FAN_MODES)
+            return
         await self.coordinator._client.send_command(0x04, bytes([int(fan_mode)]))
         self.coordinator._post_command_fast_polls = 6
         await self.coordinator.async_request_refresh()
