@@ -179,6 +179,13 @@ class VelitHeaterClient:
         ] = asyncio.Queue()
         # Resolved by the notification handler for whichever command is in flight.
         self._pending: asyncio.Future[dict | None] | None = None
+        # Func code of the in-flight command — responses echo it (protocol V1.02);
+        # notifications with a different func are not answers to this command.
+        self._pending_func: int | None = None
+        # Serialises connect attempts so the manual BLE switch and the automatic
+        # reconnect loop cannot both establish a connection and start duplicate
+        # queue runners.
+        self._connect_lock = asyncio.Lock()
         self._connected = False
         self._queue_task: asyncio.Task | None = None
         self._reconnect_task: asyncio.Task | None = None
@@ -189,35 +196,40 @@ class VelitHeaterClient:
 
     async def connect(self) -> None:
         """Connect to the device and subscribe to response notifications."""
-        device = bluetooth.async_ble_device_from_address(
-            self._hass, self._address, connectable=True
-        )
-        if device is None:
-            raise RuntimeError(f"Device {self._address} not found in Bluetooth scanner cache")
+        async with self._connect_lock:
+            if self._connected:
+                _LOGGER.debug("connect() called while already connected — ignoring")
+                return
 
-        # establish_connection handles transient failures and uses the service cache
-        # to skip GATT re-discovery on reconnect, per HA Bluetooth integration guidelines.
-        client = await establish_connection(
-            BleakClientWithServiceCache,
-            device,
-            self._address,
-            disconnected_callback=self._on_disconnect,
-        )
-        self._client = client
-        try:
-            await client.start_notify(UUID_READ_NOTIFY, self._on_notification)
-        except Exception:
-            # Disconnect before re-raising so BlueZ releases this connection and
-            # any stale notification subscription — prevents "Notify acquired" on
-            # the next attempt.
+            device = bluetooth.async_ble_device_from_address(
+                self._hass, self._address, connectable=True
+            )
+            if device is None:
+                raise RuntimeError(f"Device {self._address} not found in Bluetooth scanner cache")
+
+            # establish_connection handles transient failures and uses the service cache
+            # to skip GATT re-discovery on reconnect, per HA Bluetooth integration guidelines.
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                device,
+                self._address,
+                disconnected_callback=self._on_disconnect,
+            )
+            self._client = client
             try:
-                await client.disconnect()
+                await client.start_notify(UUID_READ_NOTIFY, self._on_notification)
             except Exception:
-                pass
-            raise
-        self._connected = True
-        self._queue_task = asyncio.create_task(self._queue_runner())
-        _LOGGER.info("Connected to %s", self._address)
+                # Disconnect before re-raising so BlueZ releases this connection and
+                # any stale notification subscription — prevents "Notify acquired" on
+                # the next attempt.
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                raise
+            self._connected = True
+            self._queue_task = asyncio.create_task(self._queue_runner())
+            _LOGGER.info("Connected to %s", self._address)
 
     async def disconnect(self) -> None:
         """Disconnect cleanly, stopping the command queue first."""
@@ -281,6 +293,7 @@ class VelitHeaterClient:
 
             loop = asyncio.get_running_loop()
             self._pending = loop.create_future()
+            self._pending_func = func
             result: dict | None = None
 
             try:
@@ -303,6 +316,7 @@ class VelitHeaterClient:
                 _LOGGER.warning("Command write failed (func 0x%02X): %s", func, exc)
             finally:
                 self._pending = None
+                self._pending_func = None
                 self._queue.task_done()
 
             if not caller_fut.done():
@@ -311,9 +325,25 @@ class VelitHeaterClient:
     def _on_notification(
         self, _char: BleakGATTCharacteristic, data: bytearray
     ) -> None:
-        """Handle an incoming notification from the device."""
+        """Handle an incoming notification from the device.
+
+        Only a valid response whose func echoes the in-flight command resolves
+        the pending future (responses echo the command func per protocol V1.02).
+        Invalid packets and mismatched funcs — e.g. a late response to a
+        previously timed-out command — are ignored so they cannot be delivered
+        as the answer to the wrong query and parsed with the wrong layout.
+        """
         parsed = parse_response(bytes(data))
         if self._pending and not self._pending.done():
+            if parsed is None:
+                _LOGGER.debug("Ignoring invalid packet while awaiting func 0x%02X", self._pending_func)
+                return
+            if self._pending_func is not None and parsed["func"] != self._pending_func:
+                _LOGGER.debug(
+                    "Ignoring response func 0x%02X while awaiting func 0x%02X",
+                    parsed["func"], self._pending_func,
+                )
+                return
             self._pending.set_result(parsed)
         elif parsed:
             _LOGGER.debug("Unsolicited notification: func 0x%02X", parsed.get("func"))
