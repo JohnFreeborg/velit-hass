@@ -39,7 +39,8 @@
     },
     "error": {
       "cannot_connect": "Failed to connect to device",
-      "unknown": "Unexpected error"
+      "unknown": "Unexpected error",
+      "invalid_address": "Invalid Bluetooth address. Enter a MAC address like AA:BB:CC:DD:EE:FF (or a UUID on macOS hosts)."
     },
     "abort": {
       "already_configured": "This device is already configured"

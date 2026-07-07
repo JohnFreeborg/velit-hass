@@ -286,3 +286,70 @@ async def test_user_flow_duplicate_aborts(hass: HomeAssistant) -> None:
     )
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "already_configured"
+
+
+# ---------------------------------------------------------------------------
+# Manual entry — address format validation
+# ---------------------------------------------------------------------------
+
+
+async def test_manual_entry_invalid_address_shows_error(hass: HomeAssistant) -> None:
+    """Malformed address re-shows the form with an error, then accepts a valid one."""
+    with patch(_PATCH_DISCOVERED, return_value=[]):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={"next_step_id": "manual"}
+    )
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={CONF_ADDRESS: "not-an-address"}
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "manual"
+    assert result["errors"] == {"base": "invalid_address"}
+
+    # Recovery: a valid address proceeds to device type selection.
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={CONF_ADDRESS: HEATER_ADDRESS}
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "device_type"
+
+
+async def test_manual_entry_normalizes_mac_case(hass: HomeAssistant) -> None:
+    """Lowercase MAC input is stored uppercase so unique IDs stay consistent."""
+    with patch(_PATCH_DISCOVERED, return_value=[]):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={"next_step_id": "manual"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={CONF_ADDRESS: "aa:bb:cc:dd:ee:0f"}
+    )
+    assert result["step_id"] == "device_type"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"device_type": DEVICE_TYPE_HEATER, CONF_NAME: "Heater"},
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_ADDRESS] == "AA:BB:CC:DD:EE:0F"
+
+
+async def test_manual_entry_accepts_corebluetooth_uuid(hass: HomeAssistant) -> None:
+    """macOS hosts use CoreBluetooth UUIDs instead of MAC addresses."""
+    with patch(_PATCH_DISCOVERED, return_value=[]):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={"next_step_id": "manual"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={CONF_ADDRESS: "12345678-1234-1234-1234-123456789ABC"},
+    )
+    assert result["step_id"] == "device_type"
