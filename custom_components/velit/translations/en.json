@@ -95,9 +95,7 @@
     "sensor": {
       "prime_countdown": {
         "name": "Fuel Pump Prime Remaining"
-      }
-    },
-    "sensor": {
+      },
       "inlet_temp": {
         "name": "Temperature"
       },
