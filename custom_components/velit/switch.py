@@ -166,8 +166,23 @@ class VelitHeaterFuelPrimingSwitch(CoordinatorEntity[VelitHeaterCoordinator], Sw
         if self._prime_task and not self._prime_task.done():
             self._prime_task.cancel()
 
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel a running prime cycle and wait for its cleanup to finish.
+
+        Awaiting here lets the task send the stop command and reset coordinator
+        state while this entity is still registered, instead of ticking on after
+        removal.
+        """
+        if self._prime_task and not self._prime_task.done():
+            self._prime_task.cancel()
+            try:
+                await self._prime_task
+            except asyncio.CancelledError:
+                pass
+
     async def _run_prime(self) -> None:
         """Countdown task — ticks every second, sends stop on completion or cancellation."""
+        cancelled = False
         try:
             while self.coordinator.prime_remaining > 0:
                 await asyncio.sleep(1)
@@ -177,8 +192,9 @@ class VelitHeaterFuelPrimingSwitch(CoordinatorEntity[VelitHeaterCoordinator], Sw
             await self.coordinator._client.send_command(0x06, bytes([0x00]))
             _LOGGER.debug("Fuel pump prime auto-stopped after %ds", _PRIME_DURATION)
         except asyncio.CancelledError:
+            cancelled = True
             await self.coordinator._client.send_command(0x06, bytes([0x00]))
-            _LOGGER.debug("Fuel pump prime stopped early by user")
+            _LOGGER.debug("Fuel pump prime stopped early")
         finally:
             self.coordinator.priming = False
             self.coordinator.prime_remaining = 0
@@ -186,6 +202,8 @@ class VelitHeaterFuelPrimingSwitch(CoordinatorEntity[VelitHeaterCoordinator], Sw
             self.async_write_ha_state()
             self.coordinator._notify_prime_tick()
             await self.coordinator.async_request_refresh()
+        if cancelled:
+            raise asyncio.CancelledError
 
 
 class VelitHeaterCleaningSwitch(CoordinatorEntity[VelitHeaterCoordinator], SwitchEntity):
