@@ -183,6 +183,9 @@ class VelitACClient:
         # queue runners.
         self._connect_lock = asyncio.Lock()
         self._connected = False
+        # Monotonic timestamp of the last successful connect — used by the
+        # coordinator's scheduled-reconnect option to measure connection age.
+        self.connected_since: float | None = None
         self.unavailable = False
         self._consecutive_failures = 0
         self._last_command_time: float = 0.0
@@ -228,6 +231,7 @@ class VelitACClient:
                     pass
                 raise
             self._connected = True
+            self.connected_since = time.monotonic()
             self.unavailable = False
             self._consecutive_failures = 0
             self._queue_task = asyncio.create_task(self._queue_runner())

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from bleak import BLEDevice
 from bleak.backends.characteristic import BleakGATTCharacteristic
@@ -187,6 +188,9 @@ class VelitHeaterClient:
         # queue runners.
         self._connect_lock = asyncio.Lock()
         self._connected = False
+        # Monotonic timestamp of the last successful connect — used by the
+        # coordinator's scheduled-reconnect option to measure connection age.
+        self.connected_since: float | None = None
         self._queue_task: asyncio.Task | None = None
         self._reconnect_task: asyncio.Task | None = None
 
@@ -228,6 +232,7 @@ class VelitHeaterClient:
                     pass
                 raise
             self._connected = True
+            self.connected_since = time.monotonic()
             self._queue_task = asyncio.create_task(self._queue_runner())
             _LOGGER.info("Connected to %s", self._address)
 

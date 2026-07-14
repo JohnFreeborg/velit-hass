@@ -39,7 +39,16 @@ from homeassistant.helpers.selector import (
     TextSelector,
 )
 
-from .const import CONF_POLL_INTERVAL, CONF_UNAVAILABLE_ON_FAULT, DEVICE_TYPE_AC, DEVICE_TYPE_HEATER, DOMAIN, UUID_SERVICE
+from .const import (
+    CONF_POLL_INTERVAL,
+    CONF_RECONNECT_ENABLED,
+    CONF_RECONNECT_INTERVAL_H,
+    CONF_UNAVAILABLE_ON_FAULT,
+    DEVICE_TYPE_AC,
+    DEVICE_TYPE_HEATER,
+    DOMAIN,
+    UUID_SERVICE,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -271,6 +280,16 @@ class VelitOptionsFlow(OptionsFlow):
                         default=current.get(CONF_POLL_INTERVAL, 30),
                     ): NumberSelector(NumberSelectorConfig(
                         min=5, max=300, step=1, mode=NumberSelectorMode.BOX,
+                    )),
+                    vol.Required(
+                        CONF_RECONNECT_ENABLED,
+                        default=current.get(CONF_RECONNECT_ENABLED, False),
+                    ): BooleanSelector(),
+                    vol.Required(
+                        CONF_RECONNECT_INTERVAL_H,
+                        default=current.get(CONF_RECONNECT_INTERVAL_H, 24),
+                    ): NumberSelector(NumberSelectorConfig(
+                        min=1, max=72, step=1, mode=NumberSelectorMode.BOX,
                     )),
                     vol.Required(
                         CONF_UNAVAILABLE_ON_FAULT,

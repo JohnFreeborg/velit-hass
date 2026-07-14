@@ -58,7 +58,12 @@
         "title": "Velit Options",
         "data": {
           "poll_interval": "Poll interval (seconds)",
+          "ble_reconnect_enabled": "Periodic BLE reconnect (Error 16 experiment)",
+          "ble_reconnect_interval_h": "Reconnect interval (hours)",
           "unavailable_on_fault": "Show device as unavailable when fault is active"
+        },
+        "data_description": {
+          "ble_reconnect_enabled": "Experimental: periodically drop and re-establish the Bluetooth connection while the device is idle. Entities go unavailable for about 30 seconds during each cycle."
         }
       }
     }
