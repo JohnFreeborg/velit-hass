@@ -161,6 +161,12 @@ class TestHeaterClimateState:
         entity, _ = _heater_entity(data=data)
         assert ClimateEntityFeature.FAN_MODE not in entity.supported_features
 
+    def test_supported_features_include_turn_on_off(self):
+        # Required for climate.turn_on/turn_off — used by tile card toggle (issue #54).
+        entity, _ = _heater_entity()
+        assert ClimateEntityFeature.TURN_ON in entity.supported_features
+        assert ClimateEntityFeature.TURN_OFF in entity.supported_features
+
     def test_hvac_action_heating_when_normal(self):
         data = {**_make_heater_coord().data, "machine_state": 1, "fault_code": 0}
         entity, _ = _heater_entity(data=data)
@@ -261,6 +267,18 @@ class TestHeaterClimateActions:
         entity, coord = _heater_entity()
         await entity.async_set_fan_mode("3")
         coord.async_request_refresh.assert_called_once()
+
+    async def test_turn_on_sends_heat_command(self):
+        # climate.turn_on uses the ClimateEntity default, which resolves to
+        # async_set_hvac_mode(HEAT) since OFF/HEAT are the only modes.
+        entity, coord = _heater_entity()
+        await entity.async_turn_on()
+        coord._client.send_command.assert_called_once_with(0x01, bytes([0x01]))
+
+    async def test_turn_off_sends_shutdown_command(self):
+        entity, coord = _heater_entity()
+        await entity.async_turn_off()
+        coord._client.send_command.assert_called_once_with(0x02, bytes([0x00]))
 
 
 # ---------------------------------------------------------------------------

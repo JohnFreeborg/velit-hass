@@ -107,9 +107,15 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
         Gear control is meaningless in Auto — the device picks the level. Hiding
         the selector prevents users from sending a gear command that would be ignored.
         """
+        # TURN_ON/TURN_OFF are required for the climate.turn_on/turn_off
+        # services used by dashboard toggle controls. With only OFF and HEAT
+        # in hvac_modes, the ClimateEntity defaults route both services
+        # through async_set_hvac_mode.
         features = (
             ClimateEntityFeature.TARGET_TEMPERATURE
             | ClimateEntityFeature.PRESET_MODE
+            | ClimateEntityFeature.TURN_ON
+            | ClimateEntityFeature.TURN_OFF
         )
         if self.preset_mode == "Manual":
             features |= ClimateEntityFeature.FAN_MODE
