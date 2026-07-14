@@ -14,7 +14,9 @@ Temperature unit detection (on first connect):
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from abc import abstractmethod
 from datetime import timedelta
 
@@ -25,7 +27,12 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .ac_client import VelitACClient
-from .const import CONF_POLL_INTERVAL, DOMAIN
+from .const import (
+    CONF_POLL_INTERVAL,
+    CONF_RECONNECT_ENABLED,
+    CONF_RECONNECT_INTERVAL_H,
+    DOMAIN,
+)
 from .heater_client import VelitHeaterClient
 from .packet_utils import fahrenheit_to_celsius
 
@@ -33,6 +40,20 @@ _LOGGER = logging.getLogger(__name__)
 
 POLL_INTERVAL_DEFAULT = 30  # seconds
 _ACTIVE_POLL_INTERVAL = timedelta(seconds=5)
+
+# Scheduled BLE reconnect (opt-in, Error 16 experiment). The Velit app does not
+# hold a connection for days the way this integration does; periodically cycling
+# the connection tests whether long-lived sessions trigger the undocumented
+# display-only Error 16. Disabled by default.
+RECONNECT_INTERVAL_DEFAULT_H = 24  # hours
+# How long the link stays down mid-cycle. A momentary blip would only test
+# cumulative session length; a real disconnected window also covers the theory
+# that the device needs time without a subscriber. Entities are briefly
+# unavailable during the pause, same as toggling the BLE switch.
+_RECONNECT_PAUSE_S = 30
+# Backoff bounds when the reconnect half of the cycle fails.
+_RECONNECT_RETRY_INITIAL_S = 1.0
+_RECONNECT_RETRY_MAX_S = 30.0
 # Number of consecutive poll failures tolerated before entities go unavailable.
 # A single BLE notification timeout is common during active device operations
 # and should not immediately surface as "unavailable" in the UI.
@@ -145,6 +166,13 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
         # Fast polling window armed after any command. Holds 5s interval for N
         # cycles so state transitions are caught quickly without waiting 30s.
         self._post_command_fast_polls: int = 0
+        # Scheduled BLE reconnect (Error 16 experiment) — see _maybe_schedule_reconnect.
+        self._reconnect_enabled: bool = entry.options.get(CONF_RECONNECT_ENABLED, False)
+        reconnect_hours = entry.options.get(
+            CONF_RECONNECT_INTERVAL_H, RECONNECT_INTERVAL_DEFAULT_H
+        )
+        self._reconnect_interval_s: float = float(reconnect_hours) * 3600
+        self._reconnect_cycle_task: asyncio.Task | None = None
 
     def register_prime_tick(self, callback) -> None:
         """Register a callback to fire on each prime countdown tick."""
@@ -174,6 +202,10 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
 
     async def async_disconnect(self) -> None:
         """Disconnect the BLE client. Called from async_unload_entry."""
+        # A reconnect cycle in flight would re-establish the connection after
+        # the entry unloads — stop it first.
+        if self._reconnect_cycle_task and not self._reconnect_cycle_task.done():
+            self._reconnect_cycle_task.cancel()
         await self._client.disconnect()  # type: ignore[attr-defined]
 
     def _detect_temp_unit(self, setpoint: int) -> str:
@@ -258,7 +290,68 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
         self._consecutive_failures = 0
         self._last_data = data
         self._update_fault_issue(data)
+        self._maybe_schedule_reconnect(data)
         return data
+
+    def _reconnect_allowed(self, data: dict) -> bool:
+        """Device-specific gate for the scheduled reconnect cycle.
+
+        Subclasses narrow this to settled/idle states so the connection is
+        never cycled while the device is doing something a user would notice.
+        """
+        return True
+
+    def _maybe_schedule_reconnect(self, data: dict) -> None:
+        """Start a scheduled BLE reconnect cycle when one is due.
+
+        Opt-in experiment for the undocumented Error 16: the theory (unconfirmed)
+        is that the integration's long-lived BLE connection triggers it, unlike
+        the Velit app's short sessions. Cycling the connection at a user-set
+        interval tests that. Runs only when enabled, connected past the
+        configured age, no cycle already in flight, and the device is idle.
+        """
+        if not self._reconnect_enabled:
+            return
+        if self._reconnect_cycle_task and not self._reconnect_cycle_task.done():
+            return
+        client = self._client  # type: ignore[attr-defined]
+        if not client.connected or client.connected_since is None:
+            return
+        if time.monotonic() - client.connected_since < self._reconnect_interval_s:
+            return
+        if not self._reconnect_allowed(data):
+            return
+        self._reconnect_cycle_task = asyncio.create_task(self._reconnect_cycle())
+
+    async def _reconnect_cycle(self) -> None:
+        """Disconnect, hold the link down briefly, then reconnect.
+
+        Retries the reconnect half with backoff — a scheduled cycle must never
+        strand the device disconnected, since a clean disconnect suppresses the
+        client's own unexpected-drop reconnect loop. Cancelled on entry unload.
+        """
+        client = self._client  # type: ignore[attr-defined]
+        _LOGGER.info(
+            "Scheduled reconnect: cycling BLE connection to %s (%.0fs pause)",
+            self._address,
+            float(_RECONNECT_PAUSE_S),
+        )
+        await client.disconnect()
+        await asyncio.sleep(_RECONNECT_PAUSE_S)
+        delay = _RECONNECT_RETRY_INITIAL_S
+        while True:
+            try:
+                await client.connect()
+                return
+            except Exception as exc:
+                _LOGGER.warning(
+                    "Scheduled reconnect to %s failed, retrying in %.0fs: %s",
+                    self._address,
+                    delay,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, _RECONNECT_RETRY_MAX_S)
 
     def _update_fault_issue(self, data: dict) -> None:
         """Raise or clear a Repairs issue based on the current fault code.
@@ -383,6 +476,20 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
                     self._cleaning_timeout_polls = 0
         return data
 
+    def _reconnect_allowed(self, data: dict) -> bool:
+        """Only cycle the connection while the heater is settled in Standby.
+
+        Error 16 appears on idle devices, so restricting the cycle to Standby
+        loses nothing — and guarantees a running burner, prime countdown, or
+        cleaning cycle is never interrupted by a scheduled disconnect.
+        """
+        return (
+            data.get("machine_state") == 0
+            and not self.priming
+            and not self.cleaning
+            and self._post_command_fast_polls == 0
+        )
+
     async def _async_poll(self) -> dict:
         q1 = await self._client.send_command(0x0A, bytes([0x00]))
         if q1 is None:
@@ -501,6 +608,15 @@ class VelitACCoordinator(_VelitBaseCoordinator):
         # fast poll window drives the interval, not machine states.
         self._adjust_poll_interval(0)
         return data
+
+    def _reconnect_allowed(self, data: dict) -> bool:
+        """Only cycle the connection while the AC is powered off.
+
+        Error 16 is a heater phenomenon, but the option is available on both
+        device types; gating on power-off ensures active cooling is never
+        interrupted by a scheduled disconnect.
+        """
+        return data.get("power") == 0x01 and self._post_command_fast_polls == 0
 
     async def _async_poll(self) -> dict:
         power_rsp = await self._client.send_command(0x01, bytes([0x00]))

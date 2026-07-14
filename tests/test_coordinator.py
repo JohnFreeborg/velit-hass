@@ -529,3 +529,116 @@ class TestHeaterParsePayloadValidation:
         coord = self._coordinator()
         data = coord._parse(Q1_DATA_C, Q2_DATA)
         assert data["fault_code"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Scheduled BLE reconnect (Error 16 experiment)
+# ---------------------------------------------------------------------------
+
+
+class TestScheduledReconnect:
+    """Opt-in periodic reconnect: scheduling gates and the cycle itself."""
+
+    def _heater(self, options=None):
+        hass = _make_hass()
+        entry = _make_entry()
+        if options is not None:
+            entry.options = options
+        with patch("custom_components.velit.coordinator.VelitHeaterClient"):
+            coord = VelitHeaterCoordinator(hass, entry)
+        coord._client = MagicMock()
+        coord._client.connected = True
+        coord._client.connected_since = 0.0
+        coord._client.disconnect = AsyncMock()
+        coord._client.connect = AsyncMock()
+        return coord
+
+    def _ac(self, options=None):
+        hass = _make_hass()
+        entry = _make_entry(device_type="ac")
+        if options is not None:
+            entry.options = options
+        with patch("custom_components.velit.coordinator.VelitACClient"):
+            coord = VelitACCoordinator(hass, entry)
+        coord._client = MagicMock()
+        coord._client.connected = True
+        coord._client.connected_since = 0.0
+        coord._client.disconnect = AsyncMock()
+        coord._client.connect = AsyncMock()
+        return coord
+
+    _ENABLED = {"ble_reconnect_enabled": True, "ble_reconnect_interval_h": 1}
+
+    async def test_disabled_by_default(self):
+        coord = self._heater()
+        with patch("custom_components.velit.coordinator.time.monotonic", return_value=1e9):
+            coord._maybe_schedule_reconnect({"machine_state": 0})
+        assert coord._reconnect_cycle_task is None
+
+    async def test_not_due_within_interval(self):
+        coord = self._heater(options=self._ENABLED)
+        with patch("custom_components.velit.coordinator.time.monotonic", return_value=3599.0):
+            coord._maybe_schedule_reconnect({"machine_state": 0})
+        assert coord._reconnect_cycle_task is None
+
+    async def test_cycle_runs_when_due_and_idle(self):
+        coord = self._heater(options=self._ENABLED)
+        with patch("custom_components.velit.coordinator.time.monotonic", return_value=3601.0), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            coord._maybe_schedule_reconnect({"machine_state": 0})
+            assert coord._reconnect_cycle_task is not None
+            await coord._reconnect_cycle_task
+        coord._client.disconnect.assert_awaited_once()
+        coord._client.connect.assert_awaited_once()
+
+    async def test_blocked_while_heater_running(self):
+        coord = self._heater(options=self._ENABLED)
+        with patch("custom_components.velit.coordinator.time.monotonic", return_value=3601.0):
+            coord._maybe_schedule_reconnect({"machine_state": 1})
+        assert coord._reconnect_cycle_task is None
+
+    async def test_blocked_while_priming(self):
+        coord = self._heater(options=self._ENABLED)
+        coord.priming = True
+        with patch("custom_components.velit.coordinator.time.monotonic", return_value=3601.0):
+            coord._maybe_schedule_reconnect({"machine_state": 0})
+        assert coord._reconnect_cycle_task is None
+
+    async def test_blocked_while_disconnected(self):
+        coord = self._heater(options=self._ENABLED)
+        coord._client.connected = False
+        with patch("custom_components.velit.coordinator.time.monotonic", return_value=3601.0):
+            coord._maybe_schedule_reconnect({"machine_state": 0})
+        assert coord._reconnect_cycle_task is None
+
+    async def test_no_duplicate_cycle(self):
+        coord = self._heater(options=self._ENABLED)
+        running = MagicMock()
+        running.done.return_value = False
+        coord._reconnect_cycle_task = running
+        with patch("custom_components.velit.coordinator.time.monotonic", return_value=3601.0):
+            coord._maybe_schedule_reconnect({"machine_state": 0})
+        assert coord._reconnect_cycle_task is running
+
+    async def test_ac_blocked_while_powered_on(self):
+        coord = self._ac(options=self._ENABLED)
+        with patch("custom_components.velit.coordinator.time.monotonic", return_value=3601.0):
+            coord._maybe_schedule_reconnect({"power": 0x02})
+        assert coord._reconnect_cycle_task is None
+
+    async def test_ac_cycles_when_powered_off(self):
+        coord = self._ac(options=self._ENABLED)
+        with patch("custom_components.velit.coordinator.time.monotonic", return_value=3601.0), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            coord._maybe_schedule_reconnect({"power": 0x01})
+            assert coord._reconnect_cycle_task is not None
+            await coord._reconnect_cycle_task
+        coord._client.disconnect.assert_awaited_once()
+        coord._client.connect.assert_awaited_once()
+
+    async def test_cycle_retries_failed_reconnect(self):
+        coord = self._heater(options=self._ENABLED)
+        coord._client.connect = AsyncMock(side_effect=[RuntimeError("not in cache"), None])
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await coord._reconnect_cycle()
+        assert coord._client.connect.await_count == 2
