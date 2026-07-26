@@ -9,6 +9,8 @@ import pytest
 
 from custom_components.velit.switch import (
     VelitACBLESwitch,
+    VelitACDisplaySwitch,
+    VelitACLightSwitch,
     VelitHeaterBLESwitch,
     VelitHeaterCleaningSwitch,
     VelitHeaterFuelPrimingSwitch,
@@ -422,3 +424,85 @@ def test_cleaning_unavailable_when_disconnected():
     entity, _ = _make_cleaning_entity(connected=False)
     assert entity.available is False
 
+
+
+# ---------------------------------------------------------------------------
+# AC light and display switches
+# ---------------------------------------------------------------------------
+
+
+def _make_ac_aux_entity(cls, unique_suffix, data=None):
+    coord = MagicMock()
+    coord._client = MagicMock()
+    coord._client.send_command = AsyncMock()
+    coord.async_request_refresh = AsyncMock()
+    coord._post_command_fast_polls = 0
+    coord.data = data
+    entry = _make_ac_entry()
+    entity = cls.__new__(cls)
+    entity.coordinator = coord
+    entity._attr_unique_id = f"{entry.data['address']}_{unique_suffix}"
+    entity._attr_device_info = MagicMock()
+    entity.async_write_ha_state = MagicMock()
+    if cls is VelitACLightSwitch:
+        entity._is_on = False
+    return entity, coord
+
+
+class TestACLightSwitch:
+    async def test_turn_on_uses_inverted_encoding(self):
+        # Key 28 is inverted relative to every other on/off control: 1 = On.
+        entity, coord = _make_ac_aux_entity(VelitACLightSwitch, "light")
+        await entity.async_turn_on()
+        coord._client.send_command.assert_awaited_once_with(0x1C, bytes([0x01]))
+        assert entity.is_on is True
+
+    async def test_turn_off_uses_inverted_encoding(self):
+        entity, coord = _make_ac_aux_entity(VelitACLightSwitch, "light")
+        await entity.async_turn_off()
+        coord._client.send_command.assert_awaited_once_with(0x1C, bytes([0x02]))
+        assert entity.is_on is False
+
+    def test_is_assumed_state(self):
+        # The key reports 1 regardless of reality, so state cannot be read back.
+        entity, _ = _make_ac_aux_entity(VelitACLightSwitch, "light")
+        assert entity.assumed_state is True
+
+
+class TestACDisplaySwitch:
+    def test_on_when_lcd_zero_and_unit_powered(self):
+        entity, _ = _make_ac_aux_entity(
+            VelitACDisplaySwitch, "display", data={"power": 0x02, "lcd_raw": 0}
+        )
+        assert entity.is_on is True
+
+    def test_off_when_lcd_one(self):
+        entity, _ = _make_ac_aux_entity(
+            VelitACDisplaySwitch, "display", data={"power": 0x02, "lcd_raw": 1}
+        )
+        assert entity.is_on is False
+
+    def test_off_when_unit_powered_off(self):
+        # Panel is physically dark when the unit is off, whatever the key reports.
+        entity, _ = _make_ac_aux_entity(
+            VelitACDisplaySwitch, "display", data={"power": 0x01, "lcd_raw": 0}
+        )
+        assert entity.is_on is False
+
+    def test_unknown_without_data(self):
+        entity, _ = _make_ac_aux_entity(VelitACDisplaySwitch, "display", data=None)
+        assert entity.is_on is None
+
+    async def test_turn_on_sends_zero(self):
+        entity, coord = _make_ac_aux_entity(
+            VelitACDisplaySwitch, "display", data={"power": 0x02, "lcd_raw": 1}
+        )
+        await entity.async_turn_on()
+        coord._client.send_command.assert_awaited_once_with(0x0A, bytes([0x00]))
+
+    async def test_turn_off_sends_one(self):
+        entity, coord = _make_ac_aux_entity(
+            VelitACDisplaySwitch, "display", data={"power": 0x02, "lcd_raw": 0}
+        )
+        await entity.async_turn_off()
+        coord._client.send_command.assert_awaited_once_with(0x0A, bytes([0x01]))

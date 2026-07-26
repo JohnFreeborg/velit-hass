@@ -326,16 +326,66 @@ class TestVelitACCoordinatorPoll:
             coord._client = mock_cls.return_value
         return coord
 
-    def _mock_responses(self, power=0x02, mode=1, temp=24, fan=3, inlet=0x18, fault=0x00):
+    def _mock_responses(
+        self,
+        power=0x02,
+        mode=1,
+        temp=24,
+        fan=3,
+        inlet=0x18,
+        fault=0x00,
+        outlet=0x10,
+        voltage=b"\x00\x84",
+        amperage=b"\x00\x00",
+        lcd=0x00,
+    ):
         """Build the ordered list of send_command responses for a full AC poll."""
         return [
-            {"data": bytes([power]), "func": 0x01},  # power
-            {"data": bytes([mode]),  "func": 0x02},  # mode
-            {"data": bytes([temp]),  "func": 0x03},  # temp
-            {"data": bytes([fan]),   "func": 0x04},  # fan
-            {"data": bytes([inlet]), "func": 0x07},  # inlet temp
-            {"data": bytes([fault]), "func": 0x0B},  # fault
+            {"data": bytes([power]),  "func": 0x01},  # power
+            {"data": bytes([mode]),   "func": 0x02},  # mode
+            {"data": bytes([temp]),   "func": 0x03},  # temp
+            {"data": bytes([fan]),    "func": 0x04},  # fan
+            {"data": bytes([inlet]),  "func": 0x07},  # inlet temp
+            {"data": bytes([outlet]), "func": 0x08},  # outlet temp
+            {"data": voltage,         "func": 0x12},  # supply voltage
+            {"data": amperage,        "func": 0x13},  # supply current
+            {"data": bytes([lcd]),    "func": 0x0A},  # lcd state
+            {"data": bytes([fault]),  "func": 0x0B},  # fault
         ]
+
+    async def test_decodes_outlet_voltage_and_lcd(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(side_effect=self._mock_responses())
+        data = await coord._async_poll()
+        assert data["outlet_temp_c"] == 16.0
+        assert data["voltage_v"] == pytest.approx(13.2)
+        assert data["lcd_raw"] == 0
+
+    async def test_outlet_temp_is_signed(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(
+            side_effect=self._mock_responses(outlet=0xFB)
+        )
+        data = await coord._async_poll()
+        assert data["outlet_temp_c"] == -5.0
+
+    async def test_voltage_falls_back_to_little_endian(self):
+        # Endianness is undocumented for key 18, so the decoder picks whichever
+        # byte order yields a physically plausible voltage.
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(
+            side_effect=self._mock_responses(voltage=b"\x84\x00")
+        )
+        data = await coord._async_poll()
+        assert data["voltage_v"] == pytest.approx(13.2)
+
+    async def test_voltage_none_when_implausible(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(
+            side_effect=self._mock_responses(voltage=b"\xff\xff")
+        )
+        data = await coord._async_poll()
+        assert data["voltage_v"] is None
 
     async def test_raises_on_power_none(self):
         coord = await self._make_coord()

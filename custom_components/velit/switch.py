@@ -49,6 +49,8 @@ async def async_setup_entry(
         ac_coordinator: VelitACCoordinator = entry.runtime_data
         async_add_entities([
             VelitACBLESwitch(ac_coordinator, entry),
+            VelitACLightSwitch(ac_coordinator, entry),
+            VelitACDisplaySwitch(ac_coordinator, entry),
         ])
 
 
@@ -292,3 +294,105 @@ class VelitACBLESwitch(CoordinatorEntity[VelitACCoordinator], SwitchEntity):
         """Disconnect from the device and suppress automatic reconnection."""
         await self.coordinator._client.disconnect()
         self.async_write_ha_state()
+
+
+class VelitACLightSwitch(CoordinatorEntity[VelitACCoordinator], SwitchEntity):
+    """Cabin night light (protocol key 28).
+
+    Two firmware quirks drive this design:
+
+    1. The on/off values are INVERTED relative to every other on/off control on
+       this board — 1 means On, 2 means Off, where power uses 1=Off, 2=On.
+    2. Querying the key returns 1 almost regardless of the actual state, so the
+       reported value is useless.
+
+    Because state cannot be read back, this is an assumed-state entity: Home
+    Assistant shows separate on and off controls rather than a toggle reflecting
+    device state. Source: gongloo/OutEquipAC protocol.md.
+    """
+
+    _attr_name = "Light"
+    _attr_icon = "mdi:lightbulb"
+    _attr_assumed_state = True
+
+    def __init__(
+        self,
+        coordinator: VelitACCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.data['address']}_light"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.data["address"])},
+            name=entry.data.get(CONF_NAME, entry.data["address"]),
+            manufacturer="Velit",
+        )
+        self._is_on = False
+
+    @property
+    def is_on(self) -> bool:
+        return self._is_on
+
+    async def async_turn_on(self, **kwargs) -> None:
+        # Inverted encoding: 1 = On.
+        await self.coordinator._client.send_command(0x1C, bytes([0x01]))
+        self._is_on = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        # Inverted encoding: 2 = Off.
+        await self.coordinator._client.send_command(0x1C, bytes([0x02]))
+        self._is_on = False
+        self.async_write_ha_state()
+
+
+class VelitACDisplaySwitch(CoordinatorEntity[VelitACCoordinator], SwitchEntity):
+    """Front panel LCD (protocol key 10).
+
+    Encoding is inverted and uses 0/1 rather than the usual 1/2: 0 = display on,
+    1 = display off. Unlike the light, this key does read back reliably.
+
+    The display is physically off whenever the unit is powered off, regardless of
+    what the key reports, and it returns to on by itself when the unit restarts —
+    so is_on gates on power state rather than trusting the raw value alone.
+    Source: gongloo/OutEquipAC protocol.md.
+    """
+
+    _attr_name = "Display"
+    _attr_icon = "mdi:monitor"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        coordinator: VelitACCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.data['address']}_display"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.data["address"])},
+            name=entry.data.get(CONF_NAME, entry.data["address"]),
+            manufacturer="Velit",
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        if self.coordinator.data is None:
+            return None
+        # Unit off -> panel is dark whatever the key says.
+        if self.coordinator.data.get("power") == 0x01:
+            return False
+        lcd_raw = self.coordinator.data.get("lcd_raw")
+        if lcd_raw is None:
+            return None
+        return lcd_raw == 0
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator._client.send_command(0x0A, bytes([0x00]))
+        self.coordinator._post_command_fast_polls = 6
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator._client.send_command(0x0A, bytes([0x01]))
+        self.coordinator._post_command_fast_polls = 6
+        await self.coordinator.async_request_refresh()

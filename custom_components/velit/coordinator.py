@@ -454,8 +454,8 @@ class VelitACCoordinator(_VelitBaseCoordinator):
     """Coordinator for Velit AC devices (protocol V1.01).
 
     Polls power (0x01), mode (0x02), temperature (0x03), fan speed (0x04),
-    swing (0x10), inlet air temperature (0x07), and fault info (0x0B) on
-    each cycle.
+    swing (0x10), inlet air temperature (0x07), outlet air temperature (0x08),
+    supply voltage (0x12), amperage (0x13), and fault info (0x0B) on each cycle.
 
     Data dict keys:
       power             int     — 0x01 = off, 0x02 = on (func 0x01 response)
@@ -463,6 +463,11 @@ class VelitACCoordinator(_VelitBaseCoordinator):
       set_temp_c        float   — current setpoint in Celsius
       fan_speed         int     — current fan speed 1–5
       inlet_temp_c      float | None  — inlet air temperature in Celsius (raw byte = °C)
+      outlet_temp_c     float | None  — outlet air temperature in Celsius (int8)
+      voltage_v         float | None  — supply voltage in volts (uint16 decivolts)
+      amperage_a        float | None  — supply current; documented as ALWAYS 0 on
+                                        these control boards, so the sensor built on
+                                        this is disabled by default
       fault_code        int     — raw fault code (0 = no fault)
       fault_name        str     — human-readable fault description
     """
@@ -496,9 +501,13 @@ class VelitACCoordinator(_VelitBaseCoordinator):
         if fan_rsp is None:
             raise UpdateFailed("No response to fan speed query (0x04)")
 
-        # Inlet temp and fault: do not raise on failure — device may not respond
-        # to these while powered off.
+        # Inlet/outlet temp, voltage, amperage and fault: do not raise on failure —
+        # the device may not respond to these while powered off.
         inlet_rsp = await self._client.send_command(0x07, bytes([0x00]))
+        outlet_rsp = await self._client.send_command(0x08, bytes([0x00]))
+        voltage_rsp = await self._client.send_command(0x12, bytes([0x00]))
+        amperage_rsp = await self._client.send_command(0x13, bytes([0x00]))
+        lcd_rsp = await self._client.send_command(0x0A, bytes([0x00]))
         fault_rsp = await self._client.send_command(0x0B, bytes([0x00]))
 
         set_temp_raw = temp_rsp["data"][0]
@@ -512,6 +521,54 @@ class VelitACCoordinator(_VelitBaseCoordinator):
         if inlet_rsp is not None and inlet_rsp["data"]:
             inlet_temp_c = float(inlet_rsp["data"][0])
 
+        # Outlet temp: int8 Celsius per protocol key 8 (signed — can read below zero).
+        outlet_temp_c: float | None = None
+        if outlet_rsp is not None and outlet_rsp["data"]:
+            raw = outlet_rsp["data"][0]
+            outlet_temp_c = float(raw - 256 if raw > 127 else raw)
+
+        def _u16_scaled(rsp: dict | None, scale: float, lo: float, hi: float) -> float | None:
+            """Decode a uint16 field, resolving byte order by plausibility.
+
+            The AC protocol (V1.01) documents keys 18/19 as uint16 but does not
+            state endianness, and unlike the heater protocol there is no worked
+            example to copy. Rather than guess, try big-endian first and fall
+            back to little-endian only if big-endian lands outside a physically
+            plausible range. Returns None if neither ordering is sensible.
+            """
+            if rsp is None or not rsp["data"]:
+                return None
+            d = rsp["data"]
+            if len(d) == 1:
+                candidates = [d[0]]
+            else:
+                candidates = [(d[0] << 8) | d[1], (d[1] << 8) | d[0]]
+            for raw in candidates:
+                value = raw * scale
+                if lo <= value <= hi:
+                    return round(value, 1)
+            _LOGGER.debug(
+                "AC %s: uint16 field out of plausible range, raw bytes %s",
+                self._address, d.hex(),
+            )
+            return None
+
+        # Voltage: uint16 decivolts. Range covers 12V/24V/48V systems with margin.
+        voltage_v = _u16_scaled(voltage_rsp, 0.1, 5.0, 70.0)
+
+        # Amperage: documented as ALWAYS 0 on these control boards (gongloo/OutEquipAC
+        # protocol.md). Polled anyway so the disabled-by-default sensor can confirm
+        # whether this particular firmware behaves differently. lo=0 accepts the 0.
+        amperage_a = _u16_scaled(amperage_rsp, 0.1, 0.0, 300.0)
+
+        # LCD (key 10): 0 = display on, 1 = display off, INVERTED relative to the
+        # standard on/off encoding. When the unit is powered off the display is
+        # physically off no matter what this reports, so the switch entity gates
+        # on power state as well.
+        lcd_raw: int | None = None
+        if lcd_rsp is not None and lcd_rsp["data"]:
+            lcd_raw = lcd_rsp["data"][0]
+
         # Fault: single byte, 0x00 = no fault. Code table not in protocol doc.
         fault_code = 0
         if fault_rsp is not None and fault_rsp["data"]:
@@ -524,6 +581,10 @@ class VelitACCoordinator(_VelitBaseCoordinator):
             "set_temp_c": self.to_celsius(set_temp_raw),
             "fan_speed": fan_rsp["data"][0],
             "inlet_temp_c": inlet_temp_c,
+            "outlet_temp_c": outlet_temp_c,
+            "voltage_v": voltage_v,
+            "amperage_a": amperage_a,
+            "lcd_raw": lcd_raw,
             "fault_code": fault_code,
             "fault_name": fault_name,
         }
