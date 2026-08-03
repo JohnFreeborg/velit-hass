@@ -25,8 +25,12 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from bleak import BleakClient, BLEDevice
+from bleak import BLEDevice
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
+
+from homeassistant.components import bluetooth
+from homeassistant.core import HomeAssistant
 
 from .const import HEATER_MASTER_ADDR, HEATER_SLAVE_ADDR, UUID_READ_NOTIFY, UUID_WRITE
 
@@ -152,21 +156,24 @@ class VelitHeaterClient:
 
     def __init__(
         self,
+        hass: HomeAssistant,
         address: str | BLEDevice,
         master_addr: bytes = HEATER_MASTER_ADDR,
         slave_addr: bytes = HEATER_SLAVE_ADDR,
     ) -> None:
         """
         Args:
+            hass:        HomeAssistant instance — used to resolve BLEDevice at connect time.
             address:     BLE device address or BLEDevice from discovery.
             master_addr: 4-byte master address (arbitrary — device ignores its value).
             slave_addr:  4-byte slave address (fixed constant on all known Velit heaters;
                          device isolation is provided by the BLE connection, not this field).
         """
-        self._address = address
+        self._hass = hass
+        self._address: str = address.address if isinstance(address, BLEDevice) else address
         self._master_addr = master_addr
         self._slave_addr = slave_addr
-        self._client: BleakClient | None = None
+        self._client: BleakClientWithServiceCache | None = None
         self._queue: asyncio.Queue[
             tuple[int, bytes, asyncio.Future[dict | None]]
         ] = asyncio.Queue()
@@ -182,13 +189,22 @@ class VelitHeaterClient:
 
     async def connect(self) -> None:
         """Connect to the device and subscribe to response notifications."""
-        client = BleakClient(
+        device = bluetooth.async_ble_device_from_address(
+            self._hass, self._address, connectable=True
+        )
+        if device is None:
+            raise RuntimeError(f"Device {self._address} not found in Bluetooth scanner cache")
+
+        # establish_connection handles transient failures and uses the service cache
+        # to skip GATT re-discovery on reconnect, per HA Bluetooth integration guidelines.
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            device,
             self._address,
             disconnected_callback=self._on_disconnect,
         )
         self._client = client
         try:
-            await client.connect()
             await client.start_notify(UUID_READ_NOTIFY, self._on_notification)
         except Exception:
             # Disconnect before re-raising so BlueZ releases this connection and
@@ -302,7 +318,7 @@ class VelitHeaterClient:
         elif parsed:
             _LOGGER.debug("Unsolicited notification: func 0x%02X", parsed.get("func"))
 
-    def _on_disconnect(self, _client: BleakClient) -> None:
+    def _on_disconnect(self, _client: BleakClientWithServiceCache) -> None:
         """Called by bleak when the connection is lost unexpectedly."""
         if not self._connected:
             # The disconnect fired during a failed connect() attempt —

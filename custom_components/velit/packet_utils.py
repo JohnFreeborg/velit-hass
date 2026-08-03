@@ -91,10 +91,10 @@ def is_valid_heater_temp_c(temp_c: int) -> bool:
 def is_valid_heater_temp_f(temp_f: int) -> bool:
     """Return True if the temperature is within the heater's Fahrenheit range.
 
-    F range: 61–86°F (16–30°C converted). Hex: 0x3D–0x56.
-    Retained for completeness; the integration operates in Celsius mode.
+    F range: 40–99°F (4–37°C converted). Hex: 0x28–0x63.
+    Confirmed on firmware 3.26 and 3.8 (2026-04-02).
     """
-    return 61 <= temp_f <= 86
+    return 40 <= temp_f <= 99
 
 
 def is_valid_ac_temp_c(temp_c: int) -> bool:

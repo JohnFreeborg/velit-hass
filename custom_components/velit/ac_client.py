@@ -28,8 +28,12 @@ import asyncio
 import logging
 import time
 
-from bleak import BleakClient, BLEDevice
+from bleak import BLEDevice
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
+
+from homeassistant.components import bluetooth
+from homeassistant.core import HomeAssistant
 
 from .const import (
     AC_COMMAND_INTERVAL_MS,
@@ -150,17 +154,20 @@ class VelitACClient:
 
     def __init__(
         self,
+        hass: HomeAssistant,
         address: str | BLEDevice,
         product_code: int = DEFAULT_PRODUCT_CODE,
     ) -> None:
         """
         Args:
+            hass:         HomeAssistant instance — used to resolve BLEDevice at connect time.
             address:      BLE device address or BLEDevice from discovery.
             product_code: 1-byte product identifier (default 0x01).
         """
-        self._address = address
+        self._hass = hass
+        self._address: str = address.address if isinstance(address, BLEDevice) else address
         self._product_code = product_code
-        self._client: BleakClient | None = None
+        self._client: BleakClientWithServiceCache | None = None
         self._queue: asyncio.Queue[
             tuple[int, bytes, asyncio.Future[dict | None]]
         ] = asyncio.Queue()
@@ -178,13 +185,22 @@ class VelitACClient:
 
     async def connect(self) -> None:
         """Connect to the device and subscribe to response notifications."""
-        client = BleakClient(
+        device = bluetooth.async_ble_device_from_address(
+            self._hass, self._address, connectable=True
+        )
+        if device is None:
+            raise RuntimeError(f"Device {self._address} not found in Bluetooth scanner cache")
+
+        # establish_connection handles transient failures and uses the service cache
+        # to skip GATT re-discovery on reconnect, per HA Bluetooth integration guidelines.
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            device,
             self._address,
             disconnected_callback=self._on_disconnect,
         )
         self._client = client
         try:
-            await client.connect()
             await client.start_notify(UUID_READ_NOTIFY, self._on_notification)
         except Exception:
             # Disconnect before re-raising so BlueZ releases this connection and
@@ -356,7 +372,7 @@ class VelitACClient:
         elif parsed:
             _LOGGER.debug("Unsolicited notification: func 0x%02X", parsed.get("func"))
 
-    def _on_disconnect(self, _client: BleakClient) -> None:
+    def _on_disconnect(self, _client: BleakClientWithServiceCache) -> None:
         """Called by bleak when the connection is lost unexpectedly."""
         if not self._connected:
             # The disconnect fired during a failed connect() attempt —

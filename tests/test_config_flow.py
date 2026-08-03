@@ -8,6 +8,8 @@ No hardware required — HA test helpers provide mock BLE discovery objects.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from homeassistant import config_entries
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
@@ -25,6 +27,8 @@ HEATER_NAME = "VELIT-VB52_FHJ/4/1"
 
 AC_ADDRESS = "AA:BB:CC:DD:EE:02"
 AC_NAME = "VELIT-AC01_XYZ/1/1"
+
+_PATCH_DISCOVERED = "custom_components.velit.config_flow.async_discovered_service_info"
 
 
 def _make_discovery(address: str, name: str) -> BluetoothServiceInfoBleak:
@@ -157,15 +161,18 @@ async def test_bluetooth_two_different_devices(hass: HomeAssistant) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Manual user path
+# Manual user path — device found in scan
 # ---------------------------------------------------------------------------
 
 
-async def test_user_flow_full(hass: HomeAssistant) -> None:
-    """Manual entry → device type + name → entry created."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
+async def test_user_flow_device_found_in_scan(hass: HomeAssistant) -> None:
+    """Scan finds device → picker shown → select device → device type → entry created."""
+    discovery = _make_discovery(HEATER_ADDRESS, HEATER_NAME)
+
+    with patch(_PATCH_DISCOVERED, return_value=[discovery]):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "user"
 
@@ -184,11 +191,79 @@ async def test_user_flow_full(hass: HomeAssistant) -> None:
     assert result["data"]["device_type"] == DEVICE_TYPE_HEATER
 
 
+# ---------------------------------------------------------------------------
+# Manual user path — no devices found
+# ---------------------------------------------------------------------------
+
+
+async def test_user_flow_no_devices_then_manual_entry(hass: HomeAssistant) -> None:
+    """Scan finds nothing → not_found menu → manual entry → entry created."""
+    with patch(_PATCH_DISCOVERED, return_value=[]):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+    assert result["type"] == FlowResultType.MENU
+    assert result["step_id"] == "not_found"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={"next_step_id": "manual"}
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "manual"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={CONF_ADDRESS: HEATER_ADDRESS}
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "device_type"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"device_type": DEVICE_TYPE_HEATER, CONF_NAME: "Van Heater"},
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_ADDRESS] == HEATER_ADDRESS
+
+
+async def test_user_flow_retry_then_found(hass: HomeAssistant) -> None:
+    """Scan finds nothing → not_found menu → retry → device appears → entry created."""
+    discovery = _make_discovery(HEATER_ADDRESS, HEATER_NAME)
+
+    with patch(_PATCH_DISCOVERED, side_effect=[[], [discovery]]):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        assert result["type"] == FlowResultType.MENU
+        assert result["step_id"] == "not_found"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={"next_step_id": "retry"}
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "user"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={CONF_ADDRESS: HEATER_ADDRESS}
+    )
+    assert result["step_id"] == "device_type"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"device_type": DEVICE_TYPE_HEATER, CONF_NAME: "Van Heater"},
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
 async def test_user_flow_duplicate_aborts(hass: HomeAssistant) -> None:
     """Manual entry with an already-configured address aborts."""
-    # Create an existing entry
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    # Create an existing entry via the manual path
+    with patch(_PATCH_DISCOVERED, return_value=[]):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={"next_step_id": "manual"}
     )
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], user_input={CONF_ADDRESS: HEATER_ADDRESS}
@@ -198,9 +273,13 @@ async def test_user_flow_duplicate_aborts(hass: HomeAssistant) -> None:
         user_input={"device_type": DEVICE_TYPE_HEATER, CONF_NAME: "Heater"},
     )
 
-    # Second attempt with the same address
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    # Second attempt with the same address should abort
+    with patch(_PATCH_DISCOVERED, return_value=[]):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={"next_step_id": "manual"}
     )
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], user_input={CONF_ADDRESS: HEATER_ADDRESS}

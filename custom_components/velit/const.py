@@ -45,10 +45,11 @@ AC_RESPONSE_TIMEOUT_S = 3     # seconds before a command is considered failed
 AC_MAX_RETRIES = 3            # attempts before marking device unavailable
 
 # Temperature encoding — both devices transmit hex values, not raw degrees.
-# C range: 16–30 displayed, 0x10–0x1E transmitted
-# F range: 61–86 displayed, 0x3D–0x56 transmitted
+# C range: 4–37 displayed, 0x04–0x25 transmitted
+# F range: 40–99 displayed, 0x28–0x63 transmitted
 # Formula: F = 1.8 * C + 32
-HEATER_MIN_TEMP_C = 16
-HEATER_MAX_TEMP_C = 30
+# Confirmed on firmware 3.26 (Andrew) and 3.8 (Jeremy), 2026-04-02.
+HEATER_MIN_TEMP_C = 4
+HEATER_MAX_TEMP_C = 37
 AC_MIN_TEMP_C = 17
 AC_MAX_TEMP_C = 30

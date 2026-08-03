@@ -295,24 +295,24 @@ class TestTemperatureUtils:
 
     def test_celsius_to_fahrenheit(self):
         # F = 1.8 * C + 32 (protocol formula)
-        assert celsius_to_fahrenheit(16) == pytest.approx(60.8)
-        assert celsius_to_fahrenheit(30) == pytest.approx(86.0)
+        assert celsius_to_fahrenheit(4) == pytest.approx(39.2)
+        assert celsius_to_fahrenheit(37) == pytest.approx(98.6)
 
     def test_fahrenheit_to_celsius(self):
-        assert fahrenheit_to_celsius(86.0) == pytest.approx(30.0)
-        assert fahrenheit_to_celsius(60.8) == pytest.approx(16.0)
+        assert fahrenheit_to_celsius(98.6) == pytest.approx(37.0)
+        assert fahrenheit_to_celsius(39.2) == pytest.approx(4.0)
 
     def test_heater_valid_celsius_range(self):
-        assert is_valid_heater_temp_c(16) is True
-        assert is_valid_heater_temp_c(30) is True
-        assert is_valid_heater_temp_c(15) is False
-        assert is_valid_heater_temp_c(31) is False
+        assert is_valid_heater_temp_c(4) is True
+        assert is_valid_heater_temp_c(37) is True
+        assert is_valid_heater_temp_c(3) is False
+        assert is_valid_heater_temp_c(38) is False
 
     def test_heater_valid_fahrenheit_range(self):
-        assert is_valid_heater_temp_f(61) is True
-        assert is_valid_heater_temp_f(86) is True
-        assert is_valid_heater_temp_f(60) is False
-        assert is_valid_heater_temp_f(87) is False
+        assert is_valid_heater_temp_f(40) is True
+        assert is_valid_heater_temp_f(99) is True
+        assert is_valid_heater_temp_f(39) is False
+        assert is_valid_heater_temp_f(100) is False
 
     def test_hex_to_fahrenheit(self):
         # Offset encoding verified on hardware (2026-03-25): raw - 60 = °F.

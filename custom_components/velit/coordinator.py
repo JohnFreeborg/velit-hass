@@ -32,13 +32,31 @@ from .packet_utils import fahrenheit_to_celsius
 _LOGGER = logging.getLogger(__name__)
 
 POLL_INTERVAL_DEFAULT = 30  # seconds
+_ACTIVE_POLL_INTERVAL = timedelta(seconds=5)
+# Number of consecutive poll failures tolerated before entities go unavailable.
+# A single BLE notification timeout is common during active device operations
+# and should not immediately surface as "unavailable" in the UI.
+_POLL_FAILURE_TOLERANCE = 2
+
+# Machine states that warrant faster polling — device is mid-transition.
+# Settled states: 0 (Standby), 1 (Normal). Transitional states per protocol doc;
+# actual device behaviour during cleaning and cooldown must be validated on hardware.
+_ACTIVE_MACHINE_STATES = {2, 3, 4, 5}  # Cooling Down, Overtemp Standby, Cleaning, Clean Complete
 
 # Setpoint ranges used to infer whether the device is in Celsius or Fahrenheit mode.
 # These ranges are non-overlapping so the unit can be determined unambiguously.
-_CELSIUS_SETPOINT_MIN = 16
-_CELSIUS_SETPOINT_MAX = 30
-_FAHRENHEIT_SETPOINT_MIN = 61
-_FAHRENHEIT_SETPOINT_MAX = 86
+# Confirmed hardware range: 4–37°C / 40–99°F (firmware 3.26 and 3.8, 2026-04-02).
+_CELSIUS_SETPOINT_MIN = 4
+_CELSIUS_SETPOINT_MAX = 37
+_FAHRENHEIT_SETPOINT_MIN = 40
+_FAHRENHEIT_SETPOINT_MAX = 99
+
+# Maximum plausible altitude per unit. Values above these indicate an
+# uninitialized or garbage sensor reading and are reported as None.
+# Bounds are deliberately generous (well above Everest) to avoid masking
+# legitimate high-altitude use while still filtering device startup glitches.
+_MAX_ALTITUDE_M = 9000   # metres — above Everest (8849 m)
+_MAX_ALTITUDE_FT = 30000 # feet   — above Everest (29032 ft)
 
 # Heater fault codes from protocol V1.02.
 HEATER_FAULT_CODES: dict[int, str] = {
@@ -71,6 +89,19 @@ HEATER_MACHINE_STATES: dict[int, str] = {
 }
 
 
+def _validate_altitude(raw: int, unit: str) -> int | None:
+    """Return raw altitude if plausible, else None.
+
+    Filters the 0xFFFF unavailable sentinel and values above a generous
+    ceiling that no camping heater could realistically report. Startup glitches
+    sometimes produce large non-sentinel values before the sensor initialises.
+    """
+    if raw == 0xFFFF:
+        return None
+    max_alt = _MAX_ALTITUDE_FT if unit == UnitOfTemperature.FAHRENHEIT else _MAX_ALTITUDE_M
+    return raw if raw <= max_alt else None
+
+
 class _VelitBaseCoordinator(DataUpdateCoordinator):
     """Shared base for Velit coordinators.
 
@@ -95,6 +126,7 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
         self._entry = entry
         self._address: str = entry.data["address"]
         self.domain = DOMAIN
+        self._configured_interval = timedelta(seconds=poll_seconds)
         # Detected on first connect — preserved for the lifetime of the entry.
         self.temp_unit: str = UnitOfTemperature.CELSIUS
         # Prime pump state — owned by VelitHeaterFuelPrimingSwitch, read by the
@@ -102,6 +134,17 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
         self.priming: bool = False
         self.prime_remaining: int = 0
         self._prime_tick_callbacks: list = []
+        # Cleaning state — managed by start_cleaning(); cleared here when the
+        # device returns to Standby after having been active.
+        self.cleaning: bool = False
+        self._cleaning_seen_active: bool = False
+        self._cleaning_timeout_polls: int = 0
+        # Poll failure tolerance — see _async_update_data.
+        self._consecutive_failures: int = 0
+        self._last_data: dict | None = None
+        # Fast polling window armed after any command. Holds 5s interval for N
+        # cycles so state transitions are caught quickly without waiting 30s.
+        self._post_command_fast_polls: int = 0
 
     def register_prime_tick(self, callback) -> None:
         """Register a callback to fire on each prime countdown tick."""
@@ -111,6 +154,12 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
         """Notify all registered prime tick listeners (e.g. countdown sensor)."""
         for cb in self._prime_tick_callbacks:
             cb()
+
+    def start_cleaning(self) -> None:
+        """Mark a cleaning cycle as initiated and reset confirmation tracking."""
+        self.cleaning = True
+        self._cleaning_seen_active = False
+        self._cleaning_timeout_polls = 0
 
     async def async_connect(self) -> None:
         """Connect the BLE client. Called from async_setup_entry."""
@@ -146,19 +195,61 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
             return fahrenheit_to_celsius(value)
         return float(value)
 
+    def _adjust_poll_interval(self, machine_state: int) -> None:
+        """Switch to fast polling during active state transitions, restore when settled.
+
+        Also uses fast polling while a cleaning cycle is pending confirmation or
+        while the post-command window is active, so state changes after any
+        command are caught within seconds rather than 30s.
+
+        Pass machine_state=0 for device types that have no transitional states (AC).
+        """
+        if self.cleaning or machine_state in _ACTIVE_MACHINE_STATES or self._post_command_fast_polls > 0:
+            if self.update_interval != _ACTIVE_POLL_INTERVAL:
+                self.update_interval = _ACTIVE_POLL_INTERVAL
+            if self._post_command_fast_polls > 0:
+                self._post_command_fast_polls -= 1
+        elif self.update_interval != self._configured_interval:
+            self.update_interval = self._configured_interval
+
     @abstractmethod
     async def _async_poll(self) -> dict:
         """Issue device queries and return a data dict. Raise UpdateFailed on error."""
 
     async def _async_update_data(self) -> dict:
-        """Called by DataUpdateCoordinator on each poll cycle."""
+        """Called by DataUpdateCoordinator on each poll cycle.
+
+        Tolerates up to _POLL_FAILURE_TOLERANCE consecutive failures before
+        marking entities unavailable. On a tolerated failure the last known
+        data is returned so the UI stays stable across transient BLE timeouts.
+        """
         try:
             data = await self._async_poll()
-        except UpdateFailed:
+        except UpdateFailed as exc:
+            self._consecutive_failures += 1
+            if self._consecutive_failures < _POLL_FAILURE_TOLERANCE and self._last_data is not None:
+                _LOGGER.debug(
+                    "Poll failed (%d/%d), returning stale data: %s",
+                    self._consecutive_failures,
+                    _POLL_FAILURE_TOLERANCE,
+                    exc,
+                )
+                return self._last_data
             raise
         except Exception as exc:
+            self._consecutive_failures += 1
+            if self._consecutive_failures < _POLL_FAILURE_TOLERANCE and self._last_data is not None:
+                _LOGGER.debug(
+                    "Poll failed (%d/%d), returning stale data: %s",
+                    self._consecutive_failures,
+                    _POLL_FAILURE_TOLERANCE,
+                    exc,
+                )
+                return self._last_data
             raise UpdateFailed(f"Unexpected error polling {self._address}: {exc}") from exc
 
+        self._consecutive_failures = 0
+        self._last_data = data
         self._update_fault_issue(data)
         return data
 
@@ -221,8 +312,63 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(hass, entry, name=f"Velit Heater {entry.data['address']}")
-        self._client = VelitHeaterClient(self._address)
+        self._client = VelitHeaterClient(self.hass, self._address)
         self._unit_detected = False
+        # Populated on first successful poll via func 0x6A. Exposed as sw_version
+        # in DeviceInfo. None until queried; remains None if the query fails.
+        self.firmware_version: str | None = None
+
+    async def _async_query_firmware_version(self) -> None:
+        """Query device firmware version via func 0x6A and cache the result.
+
+        Response payload bytes [14:16] encode the version as a big-endian uint16
+        decimal integer: e.g. 0x0139 = 313 → "3.13". Confirmed on firmware 3.13
+        (single data point — encoding consistent with known decimal-integer convention).
+        Logs a warning and leaves firmware_version as None on any failure.
+        """
+        try:
+            rsp = await self._client.send_command(0x6A, bytes([0x01]))
+            if rsp is None or len(rsp.get("data", b"")) < 16:
+                _LOGGER.warning("Firmware version query (0x6A) returned no usable response")
+                return
+            val = int.from_bytes(rsp["data"][14:16], "big")
+            self.firmware_version = f"{val // 100}.{val % 100:02d}"
+            _LOGGER.debug("Heater %s: firmware version %s", self._address, self.firmware_version)
+        except Exception as exc:
+            _LOGGER.warning("Firmware version query (0x6A) failed: %s", exc)
+
+    async def _async_update_data(self) -> dict:
+        data = await super()._async_update_data()
+        self._adjust_poll_interval(data.get("machine_state", 0))
+        if self.firmware_version is None:
+            await self._async_query_firmware_version()
+        # Track cleaning cycle completion.
+        # Only clear once the device has confirmed it left Standby (cycle started)
+        # and then returned to Standby (cycle complete). If the device never leaves
+        # Standby within the timeout window, the command was not accepted.
+        if self.cleaning:
+            machine_state = data.get("machine_state", 0)
+            if machine_state != 0:
+                self._cleaning_seen_active = True
+                self._cleaning_timeout_polls = 0
+            elif self._cleaning_seen_active:
+                # Returned to Standby after being active — cycle complete.
+                self.cleaning = False
+                self._cleaning_seen_active = False
+                self._cleaning_timeout_polls = 0
+            else:
+                # Still in Standby — waiting for device to transition.
+                self._cleaning_timeout_polls += 1
+                if self._cleaning_timeout_polls >= 6:
+                    # ~30s at 5s poll rate with no transition — command not accepted.
+                    _LOGGER.warning(
+                        "Cleaning command not confirmed by device after %d polls — clearing",
+                        self._cleaning_timeout_polls,
+                    )
+                    self.cleaning = False
+                    self._cleaning_seen_active = False
+                    self._cleaning_timeout_polls = 0
+        return data
 
     async def _async_poll(self) -> dict:
         q1 = await self._client.send_command(0x0A, bytes([0x00]))
@@ -245,6 +391,13 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
         machine_state = q1_data[4]
         heater_power_w = q1_data[5]
         fuel_pump_hz = q1_data[6] / 10.0
+
+        # TEMP: remove after cleaning and cooldown state transitions confirmed on hardware
+        _LOGGER.debug(
+            "machine_state raw=%d (%s)",
+            machine_state,
+            HEATER_MACHINE_STATES.get(machine_state, f"Unknown ({machine_state})"),
+        )
 
         # Detect unit on first successful poll.
         if not self._unit_detected:
@@ -293,35 +446,44 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
             "inlet_temp_c": self.to_celsius(inlet_native) if inlet_native is not None else None,
             "casing_temp_c": self.to_celsius(casing_native) if casing_native is not None else None,
             "outlet_temp_c": self.to_celsius(outlet_native) if outlet_native is not None else None,
-            "altitude": alt_raw if alt_raw != 0xFFFF else None,
+            "altitude": _validate_altitude(alt_raw, self.temp_unit),
         }
 
 
 class VelitACCoordinator(_VelitBaseCoordinator):
     """Coordinator for Velit AC devices (protocol V1.01).
 
-    Polls mode (0x02), temperature (0x03), fan speed (0x04), swing (0x10),
-    inlet air temperature (0x07), and fault info (0x0B) on each cycle.
-
-    Inlet temperature and fault response formats are not fully documented —
-    both are queried and the raw response is stored. Decoded values will be
-    added once response formats are confirmed via hardware capture.
+    Polls power (0x01), mode (0x02), temperature (0x03), fan speed (0x04),
+    swing (0x10), inlet air temperature (0x07), and fault info (0x0B) on
+    each cycle.
 
     Data dict keys:
+      power             int     — 0x01 = off, 0x02 = on (func 0x01 response)
       mode              int     — current operation mode code (see AC protocol 0x02)
       set_temp_c        float   — current setpoint in Celsius
       fan_speed         int     — current fan speed 1–5
-      swing             int     — 1 = swinging, 2 = stopped (raw device value)
-      inlet_temp_raw    bytes | None  — raw 0x07 response data (format unconfirmed)
-      fault_raw         bytes | None  — raw 0x0B response data (format unconfirmed)
+      inlet_temp_c      float | None  — inlet air temperature in Celsius (raw byte = °C)
+      fault_code        int     — raw fault code (0 = no fault)
+      fault_name        str     — human-readable fault description
     """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(hass, entry, name=f"Velit AC {entry.data['address']}")
-        self._client = VelitACClient(self._address)
+        self._client = VelitACClient(self.hass, self._address)
         self._unit_detected = False
 
+    async def _async_update_data(self) -> dict:
+        data = await super()._async_update_data()
+        # AC has no machine state transitions — pass 0 so only the post-command
+        # fast poll window drives the interval, not machine states.
+        self._adjust_poll_interval(0)
+        return data
+
     async def _async_poll(self) -> dict:
+        power_rsp = await self._client.send_command(0x01, bytes([0x00]))
+        if power_rsp is None:
+            raise UpdateFailed("No response to power query (0x01)")
+
         mode_rsp = await self._client.send_command(0x02, bytes([0x00]))
         if mode_rsp is None:
             raise UpdateFailed("No response to mode query (0x02)")
@@ -334,11 +496,8 @@ class VelitACCoordinator(_VelitBaseCoordinator):
         if fan_rsp is None:
             raise UpdateFailed("No response to fan speed query (0x04)")
 
-        swing_rsp = await self._client.send_command(0x10, bytes([0x00]))
-        if swing_rsp is None:
-            raise UpdateFailed("No response to swing query (0x10)")
-
-        # Inlet temp and fault formats unconfirmed — log raw, do not raise on failure.
+        # Inlet temp and fault: do not raise on failure — device may not respond
+        # to these while powered off.
         inlet_rsp = await self._client.send_command(0x07, bytes([0x00]))
         fault_rsp = await self._client.send_command(0x0B, bytes([0x00]))
 
@@ -348,11 +507,23 @@ class VelitACCoordinator(_VelitBaseCoordinator):
             self._unit_detected = True
             _LOGGER.debug("AC %s: detected temp unit %s", self._address, self.temp_unit)
 
+        # Inlet temp: single byte, always in Celsius. Confirmed on hardware (0x18 = 24°C).
+        inlet_temp_c: float | None = None
+        if inlet_rsp is not None and inlet_rsp["data"]:
+            inlet_temp_c = float(inlet_rsp["data"][0])
+
+        # Fault: single byte, 0x00 = no fault. Code table not in protocol doc.
+        fault_code = 0
+        if fault_rsp is not None and fault_rsp["data"]:
+            fault_code = fault_rsp["data"][0]
+        fault_name = "No Fault" if fault_code == 0 else f"Unknown ({fault_code})"
+
         return {
+            "power": power_rsp["data"][0],
             "mode": mode_rsp["data"][0],
             "set_temp_c": self.to_celsius(set_temp_raw),
             "fan_speed": fan_rsp["data"][0],
-            "swing": swing_rsp["data"][0],
-            "inlet_temp_raw": inlet_rsp["data"] if inlet_rsp else None,
-            "fault_raw": fault_rsp["data"] if fault_rsp else None,
+            "inlet_temp_c": inlet_temp_c,
+            "fault_code": fault_code,
+            "fault_name": fault_name,
         }

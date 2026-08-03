@@ -1,4 +1,4 @@
-"""Unit tests for VelitHeaterBLESwitch and VelitHeaterFuelPrimingSwitch."""
+"""Unit tests for Velit switch entities (heater and AC)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.velit.switch import (
+    VelitACBLESwitch,
     VelitHeaterBLESwitch,
+    VelitHeaterCleaningSwitch,
     VelitHeaterFuelPrimingSwitch,
     _PRIME_DURATION,
 )
@@ -107,6 +109,95 @@ class TestBLESwitchActions:
 
 
 # ---------------------------------------------------------------------------
+# AC BLE switch helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_ac_entry(address="C7:87:3B:49:AE:37"):
+    entry = MagicMock()
+    entry.data = {"device_type": "ac", "address": address, "name": "Test AC"}
+    return entry
+
+
+def _make_ac_ble_entity(connected=True):
+    coord = MagicMock()
+    coord._client = MagicMock()
+    coord._client.connected = connected
+    coord._client.connect = AsyncMock()
+    coord._client.disconnect = AsyncMock()
+    coord.async_request_refresh = AsyncMock()
+    entry = _make_ac_entry()
+    entity = VelitACBLESwitch.__new__(VelitACBLESwitch)
+    entity.coordinator = coord
+    entity._attr_unique_id = f"{entry.data['address']}_ble_connection"
+    entity._attr_name = "BLE Connection"
+    entity._attr_device_info = MagicMock()
+    entity.async_write_ha_state = MagicMock()
+    return entity, coord
+
+
+# ---------------------------------------------------------------------------
+# AC BLE switch — state
+# ---------------------------------------------------------------------------
+
+
+class TestACBLESwitchState:
+    def test_is_on_when_connected(self):
+        entity, _ = _make_ac_ble_entity(connected=True)
+        assert entity.is_on is True
+
+    def test_is_off_when_disconnected(self):
+        entity, _ = _make_ac_ble_entity(connected=False)
+        assert entity.is_on is False
+
+    def test_always_available(self):
+        entity, _ = _make_ac_ble_entity(connected=False)
+        assert entity.available is True
+
+
+# ---------------------------------------------------------------------------
+# AC BLE switch — actions
+# ---------------------------------------------------------------------------
+
+
+class TestACBLESwitchActions:
+    async def test_turn_off_calls_disconnect(self):
+        entity, coord = _make_ac_ble_entity(connected=True)
+        await entity.async_turn_off()
+        coord._client.disconnect.assert_awaited_once()
+
+    async def test_turn_off_writes_state(self):
+        entity, _ = _make_ac_ble_entity(connected=True)
+        await entity.async_turn_off()
+        entity.async_write_ha_state.assert_called_once()
+
+    async def test_turn_on_calls_connect(self):
+        entity, coord = _make_ac_ble_entity(connected=False)
+        await entity.async_turn_on()
+        coord._client.connect.assert_awaited_once()
+
+    async def test_turn_on_requests_refresh_on_success(self):
+        entity, coord = _make_ac_ble_entity(connected=False)
+        await entity.async_turn_on()
+        coord.async_request_refresh.assert_awaited_once()
+
+    async def test_turn_on_writes_state(self):
+        entity, _ = _make_ac_ble_entity(connected=False)
+        await entity.async_turn_on()
+        entity.async_write_ha_state.assert_called_once()
+
+    async def test_turn_on_does_not_raise_on_connect_failure(self):
+        entity, coord = _make_ac_ble_entity(connected=False)
+        coord._client.connect = AsyncMock(side_effect=Exception("BLE busy"))
+        await entity.async_turn_on()
+        entity.async_write_ha_state.assert_called_once()
+
+    def test_unique_id(self):
+        entity, _ = _make_ac_ble_entity()
+        assert entity._attr_unique_id == "C7:87:3B:49:AE:37_ble_connection"
+
+
+# ---------------------------------------------------------------------------
 # Prime switch helpers
 # ---------------------------------------------------------------------------
 
@@ -119,6 +210,7 @@ def _make_prime_entity(connected=True):
     coord.priming = False
     coord.prime_remaining = 0
     coord._notify_prime_tick = MagicMock()
+    coord.async_request_refresh = AsyncMock()
     entry = _make_entry()
     entity = VelitHeaterFuelPrimingSwitch.__new__(VelitHeaterFuelPrimingSwitch)
     entity.coordinator = coord
@@ -166,20 +258,20 @@ class TestPrimeSwitchState:
 class TestPrimeSwitchActions:
     async def test_turn_on_sends_start_command(self):
         entity, coord = _make_prime_entity()
-        with patch("asyncio.create_task"):
+        with patch.object(entity, "_run_prime", new=AsyncMock()):
             await entity.async_turn_on()
         coord._client.send_command.assert_awaited_once_with(0x05, bytes([0x00]))
 
     async def test_turn_on_sets_priming_state(self):
         entity, coord = _make_prime_entity()
-        with patch("asyncio.create_task"):
+        with patch.object(entity, "_run_prime", new=AsyncMock()):
             await entity.async_turn_on()
         assert coord.priming is True
         assert coord.prime_remaining == _PRIME_DURATION
 
     async def test_turn_on_notifies_tick(self):
         entity, coord = _make_prime_entity()
-        with patch("asyncio.create_task"):
+        with patch.object(entity, "_run_prime", new=AsyncMock()):
             await entity.async_turn_on()
         coord._notify_prime_tick.assert_called_once()
 
@@ -259,3 +351,74 @@ class TestPrimeSwitchRunPrime:
             await entity._run_prime()
         # 2 ticks during loop + 1 in finally = 3 total
         assert coord._notify_prime_tick.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Cleaning switch
+# ---------------------------------------------------------------------------
+
+
+def _make_cleaning_entity(connected=True):
+    coord = MagicMock()
+    coord._client = MagicMock()
+    coord._client.connected = connected
+    coord._client.send_command = AsyncMock()
+    coord.cleaning = False
+    coord.start_cleaning = MagicMock()
+    coord.async_request_refresh = AsyncMock()
+    entry = _make_entry()
+    entity = VelitHeaterCleaningSwitch.__new__(VelitHeaterCleaningSwitch)
+    entity.coordinator = coord
+    entity._attr_unique_id = f"{entry.data['address']}_cleaning"
+    entity._attr_device_info = MagicMock()
+    entity.async_write_ha_state = MagicMock()
+    return entity, coord
+
+
+@pytest.mark.asyncio
+class TestCleaningSwitchActions:
+    async def test_turn_on_sends_command_and_starts_cleaning(self):
+        entity, coord = _make_cleaning_entity()
+        await entity.async_turn_on()
+        coord._client.send_command.assert_awaited_once_with(0x09, bytes([0x00]))
+        coord.start_cleaning.assert_called_once()
+
+    async def test_turn_on_triggers_refresh(self):
+        entity, coord = _make_cleaning_entity()
+        await entity.async_turn_on()
+        coord.async_request_refresh.assert_awaited_once()
+
+    async def test_turn_on_noop_if_already_cleaning(self):
+        entity, coord = _make_cleaning_entity()
+        coord.cleaning = True
+        await entity.async_turn_on()
+        coord._client.send_command.assert_not_awaited()
+        coord.start_cleaning.assert_not_called()
+
+    async def test_turn_off_is_noop_snaps_back(self):
+        entity, coord = _make_cleaning_entity()
+        coord.cleaning = True
+        await entity.async_turn_off()
+        coord._client.send_command.assert_not_awaited()
+        entity.async_write_ha_state.assert_called()
+
+    async def test_is_on_reflects_coordinator_flag(self):
+        entity, coord = _make_cleaning_entity()
+        assert entity.is_on is False
+        coord.cleaning = True
+        assert entity.is_on is True
+
+    async def test_unique_id(self):
+        entity, _ = _make_cleaning_entity()
+        assert entity.unique_id == "AA:BB:CC:DD:EE:FF_cleaning"
+
+
+def test_cleaning_available_when_connected():
+    entity, _ = _make_cleaning_entity(connected=True)
+    assert entity.available is True
+
+
+def test_cleaning_unavailable_when_disconnected():
+    entity, _ = _make_cleaning_entity(connected=False)
+    assert entity.available is False
+

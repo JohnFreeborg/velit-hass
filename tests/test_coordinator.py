@@ -83,37 +83,37 @@ class TestTempUnitDetection:
 
     def test_celsius_range_detected(self):
         coord = self._coordinator()
-        assert coord._detect_temp_unit(16) == UnitOfTemperature.CELSIUS
+        assert coord._detect_temp_unit(4) == UnitOfTemperature.CELSIUS
         assert coord._detect_temp_unit(24) == UnitOfTemperature.CELSIUS
-        assert coord._detect_temp_unit(30) == UnitOfTemperature.CELSIUS
+        assert coord._detect_temp_unit(37) == UnitOfTemperature.CELSIUS
 
     def test_fahrenheit_range_detected(self):
         coord = self._coordinator()
-        assert coord._detect_temp_unit(61) == UnitOfTemperature.FAHRENHEIT
+        assert coord._detect_temp_unit(40) == UnitOfTemperature.FAHRENHEIT
         assert coord._detect_temp_unit(70) == UnitOfTemperature.FAHRENHEIT
-        assert coord._detect_temp_unit(86) == UnitOfTemperature.FAHRENHEIT
+        assert coord._detect_temp_unit(99) == UnitOfTemperature.FAHRENHEIT
 
     def test_ambiguous_falls_back_to_ha_celsius(self):
         coord = self._coordinator(hass_unit=UnitOfTemperature.CELSIUS)
         assert coord._detect_temp_unit(0) == UnitOfTemperature.CELSIUS
-        assert coord._detect_temp_unit(50) == UnitOfTemperature.CELSIUS
+        assert coord._detect_temp_unit(38) == UnitOfTemperature.CELSIUS
 
     def test_ambiguous_falls_back_to_ha_fahrenheit(self):
         coord = self._coordinator(hass_unit=UnitOfTemperature.FAHRENHEIT)
         assert coord._detect_temp_unit(0) == UnitOfTemperature.FAHRENHEIT
 
     def test_boundary_values_are_ambiguous(self):
-        # 31 and 60 are outside both named ranges — they fall back to HA system unit.
+        # 38 and 39 are outside both named ranges (gap between 37°C max and 40°F min).
         # With a Celsius HA system, both should return Celsius (the fallback), not Fahrenheit.
         coord = self._coordinator(hass_unit=UnitOfTemperature.CELSIUS)
-        assert coord._detect_temp_unit(31) == UnitOfTemperature.CELSIUS   # fallback
-        assert coord._detect_temp_unit(60) == UnitOfTemperature.CELSIUS   # fallback
+        assert coord._detect_temp_unit(38) == UnitOfTemperature.CELSIUS   # fallback
+        assert coord._detect_temp_unit(39) == UnitOfTemperature.CELSIUS   # fallback
 
     def test_boundary_values_with_fahrenheit_ha_preference(self):
         # Same ambiguous values with a Fahrenheit HA system should return Fahrenheit.
         coord = self._coordinator(hass_unit=UnitOfTemperature.FAHRENHEIT)
-        assert coord._detect_temp_unit(31) == UnitOfTemperature.FAHRENHEIT
-        assert coord._detect_temp_unit(60) == UnitOfTemperature.FAHRENHEIT
+        assert coord._detect_temp_unit(38) == UnitOfTemperature.FAHRENHEIT
+        assert coord._detect_temp_unit(39) == UnitOfTemperature.FAHRENHEIT
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +180,33 @@ class TestVelitHeaterCoordinatorParse:
         assert data["outlet_temp_c"] is None
         assert data["altitude"] is None
 
+    def test_altitude_implausible_returns_none_fahrenheit(self):
+        """Non-0xFFFF garbage values above the ceiling must be filtered."""
+        q2 = bytearray(Q2_DATA)
+        q2[11] = 0x80  # 0x8001 = 32769 ft — above _MAX_ALTITUDE_FT (30000)
+        q2[12] = 0x01
+        coord = self._make_coord()
+        data = coord._parse(Q1_DATA_F, bytes(q2))
+        assert data["altitude"] is None
+
+    def test_altitude_implausible_returns_none_celsius(self):
+        q2 = bytearray(Q2_DATA)
+        q2[11] = 0x27  # 0x2711 = 10001 m — above _MAX_ALTITUDE_M (9000)
+        q2[12] = 0x11
+        coord = self._make_coord()
+        # Force Celsius mode by using Q1_DATA_C
+        data = coord._parse(Q1_DATA_C, bytes(q2))
+        assert data["altitude"] is None
+
+    def test_altitude_at_ceiling_is_valid(self):
+        """Values exactly at the bound must pass through."""
+        q2 = bytearray(Q2_DATA)
+        q2[11] = 0x23  # 0x2328 = 9000 m exactly
+        q2[12] = 0x28
+        coord = self._make_coord()
+        data = coord._parse(Q1_DATA_C, bytes(q2))
+        assert data["altitude"] == 9000
+
     def test_gear_and_work_mode(self):
         coord = self._make_coord()
         data = coord._parse(Q1_DATA_F, Q2_DATA)
@@ -191,6 +218,57 @@ class TestVelitHeaterCoordinatorParse:
         data = coord._parse(Q1_DATA_C, Q2_DATA)
         # Q1_DATA_C has pump_freq byte = 0x05 → 0.5 Hz
         assert data["fuel_pump_hz"] == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Heater coordinator — firmware version query (0x6A)
+# ---------------------------------------------------------------------------
+
+# 0x6A response payload captured on firmware 3.13 (2026-04-16).
+# Bytes [14:16] = 0x01 0x39 = 313 → "3.13".
+_FW_RESPONSE_DATA = bytes([
+    0xFF, 0xFF, 0xFF, 0xFF, 0x03, 0x01, 0x01, 0x03,
+    0x25, 0xB0, 0x80, 0x26, 0xF1, 0x01, 0x01, 0x39,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x0C,
+])
+
+
+class TestHeaterFirmwareVersionQuery:
+    async def _make_coord(self):
+        hass = _make_hass()
+        entry = _make_entry()
+        with patch("custom_components.velit.coordinator.VelitHeaterClient") as mock_cls:
+            coord = VelitHeaterCoordinator(hass, entry)
+            coord._client = mock_cls.return_value
+        return coord
+
+    async def test_firmware_version_parsed(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(
+            return_value={"data": _FW_RESPONSE_DATA, "func": 0x6A}
+        )
+        await coord._async_query_firmware_version()
+        assert coord.firmware_version == "3.13"
+
+    async def test_firmware_version_none_on_no_response(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(return_value=None)
+        await coord._async_query_firmware_version()
+        assert coord.firmware_version is None
+
+    async def test_firmware_version_none_on_short_response(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(
+            return_value={"data": bytes(10), "func": 0x6A}
+        )
+        await coord._async_query_firmware_version()
+        assert coord.firmware_version is None
+
+    async def test_firmware_version_none_on_exception(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(side_effect=Exception("BLE error"))
+        await coord._async_query_firmware_version()
+        assert coord.firmware_version is None
 
 
 # ---------------------------------------------------------------------------
@@ -248,18 +326,18 @@ class TestVelitACCoordinatorPoll:
             coord._client = mock_cls.return_value
         return coord
 
-    def _mock_responses(self, mode=1, temp=24, fan=3, swing=2):
+    def _mock_responses(self, power=0x02, mode=1, temp=24, fan=3, inlet=0x18, fault=0x00):
         """Build the ordered list of send_command responses for a full AC poll."""
         return [
-            {"data": bytes([mode]), "func": 0x02},   # mode
-            {"data": bytes([temp]), "func": 0x03},   # temp
-            {"data": bytes([fan]),  "func": 0x04},   # fan
-            {"data": bytes([swing]),"func": 0x10},   # swing
-            None,                                     # inlet (unconfirmed format)
-            None,                                     # fault (unconfirmed format)
+            {"data": bytes([power]), "func": 0x01},  # power
+            {"data": bytes([mode]),  "func": 0x02},  # mode
+            {"data": bytes([temp]),  "func": 0x03},  # temp
+            {"data": bytes([fan]),   "func": 0x04},  # fan
+            {"data": bytes([inlet]), "func": 0x07},  # inlet temp
+            {"data": bytes([fault]), "func": 0x0B},  # fault
         ]
 
-    async def test_raises_on_mode_none(self):
+    async def test_raises_on_power_none(self):
         coord = await self._make_coord()
         coord._client.send_command = AsyncMock(return_value=None)
         with pytest.raises(UpdateFailed):
@@ -268,15 +346,16 @@ class TestVelitACCoordinatorPoll:
     async def test_returns_data_on_success(self):
         coord = await self._make_coord()
         coord._client.send_command = AsyncMock(
-            side_effect=self._mock_responses(mode=1, temp=24, fan=3, swing=2)
+            side_effect=self._mock_responses(power=0x02, mode=1, temp=24, fan=3, inlet=0x18, fault=0x00)
         )
         data = await coord._async_poll()
+        assert data["power"] == 0x02
         assert data["mode"] == 1
         assert data["set_temp_c"] == 24.0
         assert data["fan_speed"] == 3
-        assert data["swing"] == 2
-        assert data["inlet_temp_raw"] is None
-        assert data["fault_raw"] is None
+        assert data["inlet_temp_c"] == 24.0
+        assert data["fault_code"] == 0
+        assert data["fault_name"] == "No Fault"
 
     async def test_unit_detected_celsius(self):
         coord = await self._make_coord()
@@ -293,6 +372,57 @@ class TestVelitACCoordinatorPoll:
         )
         await coord._async_poll()
         assert coord.temp_unit == UnitOfTemperature.FAHRENHEIT
+
+    async def test_raises_on_mid_poll_none(self):
+        coord = await self._make_coord()
+        # Power query succeeds; mode query returns None.
+        coord._client.send_command = AsyncMock(
+            side_effect=[
+                {"data": bytes([0x02]), "func": 0x01},
+                None,
+            ]
+        )
+        with pytest.raises(UpdateFailed):
+            await coord._async_poll()
+
+    async def test_fault_data_decoded_in_poll(self):
+        coord = await self._make_coord()
+        coord._client.send_command = AsyncMock(
+            side_effect=self._mock_responses(fault=0x03)
+        )
+        data = await coord._async_poll()
+        assert data["fault_code"] == 3
+        assert data["fault_name"] != "No Fault"
+
+    def test_adjust_poll_interval_decrements_fast_poll_counter(self):
+        coord = self._make_coord_sync()
+        coord._post_command_fast_polls = 3
+        coord._adjust_poll_interval(0)
+        assert coord._post_command_fast_polls == 2
+
+    def test_adjust_poll_interval_enables_fast_when_pending(self):
+        from datetime import timedelta
+        coord = self._make_coord_sync()
+        coord._post_command_fast_polls = 2
+        coord.update_interval = timedelta(seconds=30)
+        coord._adjust_poll_interval(0)
+        assert coord.update_interval == timedelta(seconds=5)
+
+    def test_adjust_poll_interval_restores_normal_when_idle(self):
+        from datetime import timedelta
+        coord = self._make_coord_sync()
+        coord._post_command_fast_polls = 0
+        coord.update_interval = timedelta(seconds=5)
+        coord._adjust_poll_interval(0)
+        assert coord.update_interval == coord._configured_interval
+
+    def _make_coord_sync(self):
+        hass = _make_hass()
+        entry = _make_entry(device_type="ac")
+        with patch("custom_components.velit.coordinator.VelitACClient") as mock_cls:
+            coord = VelitACCoordinator(hass, entry)
+            coord._client = mock_cls.return_value
+        return coord
 
 
 # ---------------------------------------------------------------------------

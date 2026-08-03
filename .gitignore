@@ -1,7 +1,11 @@
+# macOS metadata
+.DS_Store
+
 # Local development tooling — not for version control
 .claude/
 tools/*
 !tools/discover.py
+!tools/discover.md
 
 # Python bytecode
 __pycache__/
@@ -18,3 +22,6 @@ build/
 .coverage
 htmlcov/
 coverage.xml
+
+# pyenv virtualenv management
+.python-version

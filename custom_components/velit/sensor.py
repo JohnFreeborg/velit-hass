@@ -2,18 +2,13 @@
 
 Heater sensors (all sourced from coordinator data):
   - Inlet temperature
-  - Casing temperature
-  - Outlet temperature
-  - Supply voltage
-  - Fan RPM
   - Altitude
-  - Fuel pump frequency (Hz)
-  - Heater power (W)
   - Fault code (human-readable string)
   - Machine state (human-readable string)
 
 AC sensors:
-  - Fault info (raw bytes, pending format confirmation via hardware capture)
+  - Inlet temperature (always Celsius — AC protocol encodes inlet as raw °C)
+  - Fault code (human-readable string)
 
 All temperature sensors report in Celsius — the coordinator converts from
 the device's active unit before storing values in the data dict.
@@ -33,9 +28,6 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_NAME,
-    UnitOfElectricPotential,
-    UnitOfFrequency,
-    UnitOfPower,
     UnitOfTemperature,
     UnitOfTime,
 )
@@ -44,7 +36,7 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DEVICE_TYPE_HEATER, DOMAIN
+from .const import DEVICE_TYPE_AC, DEVICE_TYPE_HEATER, DOMAIN
 from .coordinator import VelitACCoordinator, VelitHeaterCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,43 +53,10 @@ HEATER_SENSORS: tuple[VelitSensorEntityDescription, ...] = (
     VelitSensorEntityDescription(
         key="inlet_temp",
         data_key="inlet_temp_c",
-        name="Inlet Temperature",
+        name="Temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-    ),
-    VelitSensorEntityDescription(
-        key="casing_temp",
-        data_key="casing_temp_c",
-        name="Casing Temperature",
-        device_class=SensorDeviceClass.TEMPERATURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-    ),
-    VelitSensorEntityDescription(
-        key="outlet_temp",
-        data_key="outlet_temp_c",
-        name="Outlet Temperature",
-        device_class=SensorDeviceClass.TEMPERATURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-    ),
-    VelitSensorEntityDescription(
-        key="voltage",
-        data_key="voltage_v",
-        name="Supply Voltage",
-        device_class=SensorDeviceClass.VOLTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    VelitSensorEntityDescription(
-        key="fan_rpm",
-        data_key="fan_rpm",
-        name="Fan Speed",
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="RPM",
-        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     VelitSensorEntityDescription(
         key="altitude",
@@ -106,24 +65,6 @@ HEATER_SENSORS: tuple[VelitSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         # Unit depends on the device's active temperature unit (metric vs imperial).
         # Set dynamically in VelitHeaterSensorEntity based on coordinator.temp_unit.
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    VelitSensorEntityDescription(
-        key="fuel_pump_freq",
-        data_key="fuel_pump_hz",
-        name="Fuel Pump Frequency",
-        device_class=SensorDeviceClass.FREQUENCY,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfFrequency.HERTZ,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    VelitSensorEntityDescription(
-        key="heater_power",
-        data_key="heater_power_w",
-        name="Heater Power",
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfPower.WATT,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     VelitSensorEntityDescription(
@@ -136,6 +77,24 @@ HEATER_SENSORS: tuple[VelitSensorEntityDescription, ...] = (
         data_key="machine_state_str",
         name="Machine State",
         entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
+
+# Sensor descriptors for all AC sensors.
+AC_SENSORS: tuple[VelitSensorEntityDescription, ...] = (
+    VelitSensorEntityDescription(
+        key="inlet_temp",
+        data_key="inlet_temp_c",
+        name="Temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        # AC inlet temp is always encoded as raw Celsius in the protocol.
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+    ),
+    VelitSensorEntityDescription(
+        key="fault_code",
+        data_key="fault_name",
+        name="Fault",
     ),
 )
 
@@ -154,8 +113,11 @@ async def async_setup_entry(
               for description in HEATER_SENSORS),
             VelitHeaterPrimeCountdownSensor(coordinator, entry),
         ])
-    else:
-        async_add_entities([VelitACFaultSensorEntity(coordinator, entry)])
+    elif entry.data["device_type"] == DEVICE_TYPE_AC:
+        async_add_entities([
+            VelitACSensorEntity(coordinator, entry, description)
+            for description in AC_SENSORS
+        ])
 
 
 class VelitHeaterSensorEntity(CoordinatorEntity[VelitHeaterCoordinator], SensorEntity):
@@ -226,25 +188,20 @@ class VelitHeaterPrimeCountdownSensor(SensorEntity):
         return self._coordinator.prime_remaining
 
 
-class VelitACFaultSensorEntity(CoordinatorEntity[VelitACCoordinator], SensorEntity):
-    """Exposes raw AC fault query response pending format confirmation.
+class VelitACSensorEntity(CoordinatorEntity[VelitACCoordinator], SensorEntity):
+    """A single sensor entity reading from the AC coordinator data dict."""
 
-    The AC protocol document lists func 0x0B as 'System Fault Info' but does
-    not provide a response format or fault code table. This sensor stores the
-    raw response bytes as a hex string until the format is confirmed via
-    hardware capture and a proper decoder can be added.
-    """
-
-    _attr_name = "Fault Info (raw)"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    entity_description: VelitSensorEntityDescription
 
     def __init__(
         self,
         coordinator: VelitACCoordinator,
         entry: ConfigEntry,
+        description: VelitSensorEntityDescription,
     ) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.data['address']}_fault_raw"
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.data['address']}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.data["address"])},
             name=entry.data.get(CONF_NAME, entry.data["address"]),
@@ -252,10 +209,7 @@ class VelitACFaultSensorEntity(CoordinatorEntity[VelitACCoordinator], SensorEnti
         )
 
     @property
-    def native_value(self) -> str | None:
+    def native_value(self) -> float | int | str | None:
         if self.coordinator.data is None:
             return None
-        raw = self.coordinator.data.get("fault_raw")
-        if raw is None:
-            return None
-        return raw.hex()
+        return self.coordinator.data.get(self.entity_description.data_key)

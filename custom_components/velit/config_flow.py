@@ -3,7 +3,10 @@
 Two entry paths:
   - Bluetooth discovery: HA detects a Velit advertisement and calls
     async_step_bluetooth automatically.
-  - Manual: user initiates from the UI and enters the BLE address.
+  - Manual: user initiates from the UI; HA scans for visible Velit devices
+    and presents a picker. If none are found the user is prompted to close
+    the Velit mobile app (which holds the BLE connection) and retry, or
+    fall back to entering the address manually.
 
 Both paths converge at async_step_device_type where the user selects
 Heater or AC and assigns a friendly name. Device type cannot be inferred
@@ -18,7 +21,10 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
+from homeassistant.components.bluetooth import (
+    BluetoothServiceInfoBleak,
+    async_discovered_service_info,
+)
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 from homeassistant.helpers.selector import (
@@ -32,9 +38,18 @@ from homeassistant.helpers.selector import (
     TextSelector,
 )
 
-from .const import CONF_POLL_INTERVAL, CONF_UNAVAILABLE_ON_FAULT, DEVICE_TYPE_AC, DEVICE_TYPE_HEATER, DOMAIN
+from .const import CONF_POLL_INTERVAL, CONF_UNAVAILABLE_ON_FAULT, DEVICE_TYPE_AC, DEVICE_TYPE_HEATER, DOMAIN, UUID_SERVICE
 
 _LOGGER = logging.getLogger(__name__)
+
+# BLE advertisement name prefixes that identify Velit devices, matching the
+# manifest.json bluetooth matchers.
+_VELIT_NAME_PREFIXES = ("VELIT", "VLIT", "D30", "KT2")
+
+# BEKEN Corp manufacturer ID (0x585A = 22618), present in all known Velit
+# advertisements. Some firmware versions advertise with the MAC as the local
+# name rather than a VELIT* prefix — manufacturer ID is the reliable fallback.
+_VELIT_MANUFACTURER_ID = 22618
 
 
 class VelitConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -49,6 +64,8 @@ class VelitConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._address: str = ""
         self._name: str = ""
+        # Devices visible during the last scan, keyed by BLE address.
+        self._discovered: dict[str, BluetoothServiceInfoBleak] = {}
 
     # ------------------------------------------------------------------
     # Bluetooth discovery path
@@ -91,7 +108,70 @@ class VelitConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle manual entry — user provides the BLE device address."""
+        """Scan for visible Velit devices and present a picker.
+
+        If no devices are found the user is shown a menu that lets them
+        retry the scan (after closing the mobile app) or enter an address
+        manually.
+        """
+        if user_input is not None:
+            address = user_input[CONF_ADDRESS]
+            await self.async_set_unique_id(address)
+            self._abort_if_unique_id_configured()
+            self._address = address
+            info = self._discovered.get(address)
+            self._name = info.name if info and info.name else address
+            return await self.async_step_device_type()
+
+        self._discovered = {
+            info.address: info
+            for info in async_discovered_service_info(self.hass, connectable=True)
+            if (info.name and info.name.startswith(_VELIT_NAME_PREFIXES))
+            or _VELIT_MANUFACTURER_ID in info.manufacturer_data
+            or UUID_SERVICE in info.service_uuids
+        }
+
+        if not self._discovered:
+            return await self.async_step_not_found()
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ADDRESS): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                SelectOptionDict(
+                                    value=addr,
+                                    label=f"{info.name} ({addr})",
+                                )
+                                for addr, info in self._discovered.items()
+                            ]
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def async_step_not_found(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show the not-found menu with mobile app guidance and retry/manual options."""
+        return self.async_show_menu(
+            step_id="not_found",
+            menu_options=["retry", "manual"],
+        )
+
+    async def async_step_retry(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Re-run the device scan after the user closes the mobile app."""
+        return await self.async_step_user()
+
+    async def async_step_manual(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manual address entry fallback when BT scan finds no devices."""
         if user_input is not None:
             address = user_input[CONF_ADDRESS]
             await self.async_set_unique_id(address)
@@ -101,7 +181,7 @@ class VelitConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self.async_step_device_type()
 
         return self.async_show_form(
-            step_id="user",
+            step_id="manual",
             data_schema=vol.Schema({vol.Required(CONF_ADDRESS): str}),
         )
 
