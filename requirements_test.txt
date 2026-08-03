@@ -1,0 +1,10 @@
+pytest-homeassistant-custom-component
+pytest>=7.0
+pytest-cov
+syrupy
+ruff
+# Transitive dependencies pulled in by HA's bluetooth/USB components at import time.
+# Not declared by pytest-homeassistant-custom-component but required for tests to collect.
+aiousbwatcher
+pyserial
+pyudev

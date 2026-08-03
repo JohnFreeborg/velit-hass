@@ -1,0 +1,106 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Add Velit Device",
+        "description": "Enter the Bluetooth address of your Velit device.",
+        "data": {
+          "address": "Bluetooth Address"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "Confirm Velit Device",
+        "description": "Set up {name}?"
+      },
+      "device_type": {
+        "title": "Configure Device",
+        "description": "Select the device type and give it a name to identify it in Home Assistant.",
+        "data": {
+          "device_type": "Device Type",
+          "name": "Device Name"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to device",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This device is already configured",
+      "no_devices_found": "No Velit devices found nearby"
+    }
+  },
+  "issues": {
+    "device_fault": {
+      "title": "{device_name}: {fault_code_display} {fault_name}",
+      "description": "The device is reporting **{fault_code_display} — {fault_name}**.\n\nCheck the device and clear the fault before restarting the heater."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Velit Options",
+        "data": {
+          "poll_interval": "Poll interval (seconds)",
+          "unavailable_on_fault": "Show device as unavailable when fault is active"
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "cleaning": {
+        "name": "Cleaning"
+      }
+    },
+    "switch": {
+      "ble_connection": {
+        "name": "BLE Connection"
+      },
+      "fuel_priming": {
+        "name": "Fuel Pump Prime"
+      }
+    },
+    "sensor": {
+      "prime_countdown": {
+        "name": "Fuel Pump Prime Remaining"
+      }
+    },
+    "sensor": {
+      "inlet_temp": {
+        "name": "Inlet Temperature"
+      },
+      "casing_temp": {
+        "name": "Casing Temperature"
+      },
+      "outlet_temp": {
+        "name": "Outlet Temperature"
+      },
+      "voltage": {
+        "name": "Supply Voltage"
+      },
+      "fan_rpm": {
+        "name": "Fan Speed"
+      },
+      "altitude": {
+        "name": "Altitude"
+      },
+      "fuel_pump_freq": {
+        "name": "Fuel Pump Frequency"
+      },
+      "heater_power": {
+        "name": "Heater Power"
+      },
+      "fault_code": {
+        "name": "Fault"
+      },
+      "machine_state": {
+        "name": "Machine State"
+      },
+      "fault_raw": {
+        "name": "Fault Info (raw)"
+      }
+    }
+  }
+}

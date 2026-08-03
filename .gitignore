@@ -1,0 +1,20 @@
+# Local development tooling — not for version control
+.claude/
+tools/*
+!tools/discover.py
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Test and build artifacts
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+coverage.xml
