@@ -43,12 +43,14 @@ from .const import CONF_POLL_INTERVAL, CONF_UNAVAILABLE_ON_FAULT, DEVICE_TYPE_AC
 _LOGGER = logging.getLogger(__name__)
 
 # BLE advertisement name prefixes that identify Velit devices, matching the
-# manifest.json bluetooth matchers.
+# manifest.json bluetooth matchers. KT2* covers the AC units, which advertise a
+# KT + yyyymm + serial name; the rest cover heater firmware variants.
 _VELIT_NAME_PREFIXES = ("VELIT", "VLIT", "D30", "KT2")
 
-# BEKEN Corp manufacturer ID (0x585A = 22618), present in all known Velit
-# advertisements. Some firmware versions advertise with the MAC as the local
-# name rather than a VELIT* prefix — manufacturer ID is the reliable fallback.
+# BEKEN Corp manufacturer ID (0x585A = 22618). Present on heaters, including
+# firmware that advertises the MAC as the local name instead of a VELIT* prefix,
+# so it is the fallback that makes those units discoverable. Not present on the
+# AC units sampled so far — they are matched by name alone.
 _VELIT_MANUFACTURER_ID = 22618
 
 
@@ -123,6 +125,13 @@ class VelitConfigFlow(ConfigFlow, domain=DOMAIN):
             self._name = info.name if info and info.name else address
             return await self.async_step_device_type()
 
+        # Deliberately broader than the manifest.json matchers, which do not
+        # include UUID_SERVICE. ffe0 is a generic BLE-serial UUID shared with
+        # unrelated hardware, so matching it automatically would pop up
+        # discovery cards for devices that are not Velit units. Here the user
+        # has already chosen to add a Velit device and confirms the type on the
+        # next step, so a wider net is worth the occasional foreign entry — it
+        # keeps units we have not sampled addable without an address.
         self._discovered = {
             info.address: info
             for info in async_discovered_service_info(self.hass, connectable=True)
