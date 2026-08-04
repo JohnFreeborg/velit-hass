@@ -556,3 +556,43 @@ class TestHeaterClimateAvailable:
         from custom_components.velit.const import CONF_UNAVAILABLE_ON_FAULT
         entity, _ = _heater_entity(data=None, options={CONF_UNAVAILABLE_ON_FAULT: True})
         assert entity.available is True
+
+
+# ---------------------------------------------------------------------------
+# AC heat mode
+# ---------------------------------------------------------------------------
+
+
+class TestACClimateHeat:
+    def test_heat_is_an_offered_mode(self):
+        entity, _ = _ac_entity()
+        assert HVACMode.HEAT in entity.hvac_modes
+
+    def test_hvac_mode_heat_when_mode_code_two(self):
+        entity, _ = _ac_entity(data={**_make_ac_coord().data, "mode": 2})
+        assert entity.hvac_mode == HVACMode.HEAT
+
+    def test_hvac_action_heating(self):
+        entity, _ = _ac_entity(data={**_make_ac_coord().data, "mode": 2})
+        assert entity.hvac_action == HVACAction.HEATING
+
+    async def test_set_hvac_heat(self):
+        entity, coord = _ac_entity(data={**_make_ac_coord().data, "power": 0x01})
+        await entity.async_set_hvac_mode(HVACMode.HEAT)
+        calls = coord._client.send_command.call_args_list
+        assert calls[0].args == (0x01, bytes([0x02]))
+        assert calls[1].args == (0x02, bytes([0x02]))
+
+    async def test_turn_off_from_heat_switches_to_cool_first(self):
+        # Firmware bug workaround: a unit powered off in heat mode re-engages the
+        # heater periodically, so cooling must be selected before cutting power.
+        entity, coord = _ac_entity(data={**_make_ac_coord().data, "mode": 2})
+        await entity.async_set_hvac_mode(HVACMode.OFF)
+        calls = coord._client.send_command.call_args_list
+        assert calls[0].args == (0x02, bytes([0x01]))
+        assert calls[1].args == (0x01, bytes([0x01]))
+
+    async def test_turn_off_from_cool_sends_power_off_only(self):
+        entity, coord = _ac_entity(data={**_make_ac_coord().data, "mode": 1})
+        await entity.async_set_hvac_mode(HVACMode.OFF)
+        coord._client.send_command.assert_called_once_with(0x01, bytes([0x01]))

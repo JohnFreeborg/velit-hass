@@ -8,6 +8,9 @@ Heater sensors (all sourced from coordinator data):
 
 AC sensors:
   - Inlet temperature (always Celsius — AC protocol encodes inlet as raw °C)
+  - Outlet temperature (int8 Celsius, protocol key 8)
+  - Supply voltage (uint16 decivolts, protocol key 18)
+  - Supply current (protocol key 19; documented as always 0, disabled by default)
   - Fault code (human-readable string)
 
 All temperature sensors report in Celsius — the coordinator converts from
@@ -28,6 +31,8 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_NAME,
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
     UnitOfTemperature,
     UnitOfTime,
 )
@@ -90,6 +95,37 @@ AC_SENSORS: tuple[VelitSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         # AC inlet temp is always encoded as raw Celsius in the protocol.
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+    ),
+    VelitSensorEntityDescription(
+        key="outlet_temp",
+        data_key="outlet_temp_c",
+        name="Outlet Temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+    ),
+    VelitSensorEntityDescription(
+        key="supply_voltage",
+        data_key="voltage_v",
+        name="Supply Voltage",
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        suggested_display_precision=1,
+    ),
+    VelitSensorEntityDescription(
+        key="supply_current",
+        data_key="amperage_a",
+        name="Supply Current",
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        suggested_display_precision=1,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        # Protocol key 19 is documented as always reporting 0 on these control
+        # boards, so this is off by default. Enable it to check whether this
+        # particular firmware actually populates it.
+        entity_registry_enabled_default=False,
     ),
     VelitSensorEntityDescription(
         key="fault_code",

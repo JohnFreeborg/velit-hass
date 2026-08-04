@@ -47,6 +47,7 @@ _HEATER_MODE_THERMOSTAT = 2
 
 # AC operation mode codes (func 0x02).
 _AC_MODE_COOL = 1
+_AC_MODE_HEAT = 2
 _AC_MODE_FAN = 3
 _AC_MODE_ENERGY_SAVING = 4
 _AC_MODE_SLEEP = 5
@@ -307,6 +308,8 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
     HVAC modes:
       OFF       — power off (func 0x01, data 0x01)
       COOL      — cooling mode
+      HEAT      — heating mode (protocol mode 0x02); only does anything on units
+                  fitted with the optional PTC heater
       FAN_ONLY  — fan mode and vent mode both map here (protocols 0x03 and 0x08)
 
     Presets (active within the current HVAC mode):
@@ -319,7 +322,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
     functional difference between them is unconfirmed without hardware testing.
     """
 
-    _attr_hvac_modes = [HVACMode.OFF, HVACMode.COOL, HVACMode.FAN_ONLY]
+    _attr_hvac_modes = [HVACMode.OFF, HVACMode.COOL, HVACMode.HEAT, HVACMode.FAN_ONLY]
     _attr_preset_modes = [AC_PRESET_NONE, AC_PRESET_ENERGY_SAVING, AC_PRESET_SLEEP, AC_PRESET_TURBO]
     _attr_fan_modes = FAN_MODES
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
@@ -338,6 +341,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
     # Map from AC protocol mode codes to HA HVACMode.
     _MODE_TO_HVAC: dict[int, HVACMode] = {
         _AC_MODE_COOL: HVACMode.COOL,
+        _AC_MODE_HEAT: HVACMode.HEAT,
         _AC_MODE_FAN: HVACMode.FAN_ONLY,
         _AC_MODE_VENT: HVACMode.FAN_ONLY,   # unconfirmed; see class docstring
     }
@@ -450,6 +454,8 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
             base = self._MODE_TO_HVAC.get(mode_code, self._last_hvac_mode)
         if base == HVACMode.COOL:
             return HVACAction.COOLING
+        if base == HVACMode.HEAT:
+            return HVACAction.HEATING
         if base == HVACMode.FAN_ONLY:
             return HVACAction.FAN
         return HVACAction.IDLE
@@ -457,6 +463,12 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if hvac_mode == HVACMode.OFF:
+            # Control-board firmware bug: a unit powered off while left in heat
+            # mode briefly engages the heater every few minutes. Documented
+            # workaround is to switch to cooling before cutting power.
+            # See gongloo/OutEquipAC protocol.md.
+            if self.hvac_mode == HVACMode.HEAT:
+                await self.coordinator._client.send_command(0x02, bytes([_AC_MODE_COOL]))
             await self.coordinator._client.send_command(0x01, bytes([0x01]))
         else:
             # Power on first if currently off, then set mode.
@@ -464,6 +476,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
                 await self.coordinator._client.send_command(0x01, bytes([0x02]))
             mode_map = {
                 HVACMode.COOL: _AC_MODE_COOL,
+                HVACMode.HEAT: _AC_MODE_HEAT,
                 HVACMode.FAN_ONLY: _AC_MODE_FAN,
             }
             code = mode_map.get(hvac_mode)
@@ -479,6 +492,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
             # Restore the last base HVAC mode.
             mode_map = {
                 HVACMode.COOL: _AC_MODE_COOL,
+                HVACMode.HEAT: _AC_MODE_HEAT,
                 HVACMode.FAN_ONLY: _AC_MODE_FAN,
             }
             code = mode_map.get(self._last_hvac_mode, _AC_MODE_COOL)
