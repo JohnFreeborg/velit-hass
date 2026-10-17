@@ -8,6 +8,8 @@ No hardware required — HA test helpers provide mock BLE discovery objects.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import patch
 
 from homeassistant import config_entries
@@ -31,15 +33,20 @@ AC_NAME = "VELIT-AC01_XYZ/1/1"
 _PATCH_DISCOVERED = "custom_components.velit.config_flow.async_discovered_service_info"
 
 
-def _make_discovery(address: str, name: str) -> BluetoothServiceInfoBleak:
+def _make_discovery(
+    address: str,
+    name: str,
+    manufacturer_data: dict[int, bytes] | None = None,
+    service_uuids: list[str] | None = None,
+) -> BluetoothServiceInfoBleak:
     """Return a minimal BluetoothServiceInfoBleak for testing."""
     return BluetoothServiceInfoBleak(
         name=name,
         address=address,
         rssi=-60,
-        manufacturer_data={},
+        manufacturer_data=manufacturer_data or {},
         service_data={},
-        service_uuids=[],
+        service_uuids=service_uuids or [],
         source="local",
         device=None,  # type: ignore[arg-type]
         advertisement=None,  # type: ignore[arg-type]
@@ -286,3 +293,102 @@ async def test_user_flow_duplicate_aborts(hass: HomeAssistant) -> None:
     )
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "already_configured"
+
+
+# ---------------------------------------------------------------------------
+# Discovery matching — real advertisements captured from user hardware
+#
+# Recorded via the HA Bluetooth Advertisement Monitor and reported on issue #13.
+# The JK BMS is a genuine false positive: it shares the generic ffe0 BLE-serial
+# UUID with the heaters but is unrelated hardware.
+# ---------------------------------------------------------------------------
+
+UUID_FFE0 = "0000ffe0-0000-1000-8000-00805f9b34fb"
+UUID_FEE7 = "0000fee7-0000-1000-8000-00805f9b34fb"
+
+
+def _real_heater() -> BluetoothServiceInfoBleak:
+    """Heater advertising the MAC as its name, identified by manufacturer ID."""
+    return _make_discovery(
+        "C8:47:80:57:7F:E1",
+        "C8:47:80:57:7F:E1",
+        manufacturer_data={22618: bytes.fromhex("c84780577fe1")},
+        service_uuids=[UUID_FFE0],
+    )
+
+
+def _real_ac_a() -> BluetoothServiceInfoBleak:
+    """AC unit: name only, no manufacturer data, no service UUIDs."""
+    return _make_discovery("D6:CD:31:59:B6:D5", "KT2024080000264")
+
+
+def _real_ac_b() -> BluetoothServiceInfoBleak:
+    """Second AC unit, same advertisement structure as the first."""
+    return _make_discovery("F1:EB:7D:6C:F3:AB", "KT2024080001189")
+
+
+def _real_foreign_bms() -> BluetoothServiceInfoBleak:
+    """JK BMS — not a Velit device, but advertises the same generic ffe0 UUID."""
+    return _make_discovery(
+        "98:DA:10:08:04:EA",
+        "98:DA:10:08:04:EA",
+        manufacturer_data={2917: bytes.fromhex("88a098da100804ea")},
+        service_uuids=[UUID_FFE0, UUID_FEE7],
+    )
+
+
+def test_manifest_does_not_match_bare_service_uuid() -> None:
+    """Guard the fix for issue #13.
+
+    ffe0 is a generic BLE-serial UUID used by unrelated hardware, so matching
+    it on its own makes HA raise a discovery card for every such device. Every
+    Velit unit sampled so far is identified by name or manufacturer ID instead.
+    """
+    manifest_path = Path(__file__).parent.parent / "custom_components" / "velit" / "manifest.json"
+    matchers = json.loads(manifest_path.read_text())["bluetooth"]
+
+    for matcher in matchers:
+        keys = set(matcher) - {"connectable"}
+        assert keys != {"service_uuid"}, f"bare service_uuid matcher: {matcher}"
+
+
+async def test_manual_scan_finds_real_velit_devices(hass: HomeAssistant) -> None:
+    """All three sampled Velit units appear in the manual picker.
+
+    The heater matches on manufacturer ID because it advertises no usable name;
+    both AC units match on the KT2 name prefix because they advertise neither
+    manufacturer data nor service UUIDs.
+    """
+    devices = [_real_heater(), _real_ac_a(), _real_ac_b()]
+
+    with patch(_PATCH_DISCOVERED, return_value=devices):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "user"
+
+    options = result["data_schema"].schema[CONF_ADDRESS].config["options"]
+    assert {option["value"] for option in options} == {
+        "C8:47:80:57:7F:E1",
+        "D6:CD:31:59:B6:D5",
+        "F1:EB:7D:6C:F3:AB",
+    }
+
+
+async def test_manual_scan_still_lists_ffe0_devices(hass: HomeAssistant) -> None:
+    """The manual picker stays broader than the manifest matchers, by design.
+
+    Dropping the ffe0 matcher stops unsolicited discovery cards, but the user
+    initiated this flow and confirms the device type on the next step, so the
+    scan keeps its ffe0 clause to remain usable for units we have not sampled.
+    A foreign ffe0 device appearing here is the accepted cost.
+    """
+    with patch(_PATCH_DISCOVERED, return_value=[_real_foreign_bms()]):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "user"
