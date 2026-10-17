@@ -60,10 +60,11 @@
           "poll_interval": "Poll interval (seconds)",
           "ble_reconnect_enabled": "Periodic BLE reconnect (Error 16 experiment)",
           "ble_reconnect_interval_h": "Reconnect interval (hours)",
+          "ble_reconnect_pause_min": "Disconnected period (minutes)",
           "unavailable_on_fault": "Show device as unavailable when fault is active"
         },
         "data_description": {
-          "ble_reconnect_enabled": "Experimental: periodically drop and re-establish the Bluetooth connection while the device is idle. Entities go unavailable for about 30 seconds during each cycle."
+          "ble_reconnect_enabled": "Experimental: periodically drop and re-establish the Bluetooth connection while the device is idle. The device stays disconnected for the configured period; entities hold their last values and any command reconnects immediately."
         }
       }
     }

@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 
 from bleak import BLEDevice
 from bleak.backends.characteristic import BleakGATTCharacteristic
@@ -186,6 +187,9 @@ class VelitACClient:
         # Monotonic timestamp of the last successful connect — used by the
         # coordinator's scheduled-reconnect option to measure connection age.
         self.connected_since: float | None = None
+        # Set by the coordinator during a scheduled-reconnect pause. Awaited by
+        # send_command when disconnected so a user command ends the pause.
+        self.on_send_while_disconnected: Callable[[], Awaitable[None]] | None = None
         self.unavailable = False
         self._consecutive_failures = 0
         self._last_command_time: float = 0.0
@@ -285,6 +289,9 @@ class VelitACClient:
                 return None
             self._last_unavailable_probe = now
             _LOGGER.debug("Device marked unavailable — sending probe command (func 0x%02X)", func)
+
+        if not self._connected and self.on_send_while_disconnected is not None:
+            await self.on_send_while_disconnected()
 
         if not self._connected:
             _LOGGER.debug("send_command called while not connected")

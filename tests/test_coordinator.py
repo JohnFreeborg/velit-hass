@@ -5,6 +5,8 @@ All BLE client calls are mocked — no hardware required.
 
 from __future__ import annotations
 
+import contextlib
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -551,6 +553,7 @@ class TestScheduledReconnect:
         coord._client.connected_since = 0.0
         coord._client.disconnect = AsyncMock()
         coord._client.connect = AsyncMock()
+        coord._reconnect_pause_s = 0
         return coord
 
     def _ac(self, options=None):
@@ -565,6 +568,7 @@ class TestScheduledReconnect:
         coord._client.connected_since = 0.0
         coord._client.disconnect = AsyncMock()
         coord._client.connect = AsyncMock()
+        coord._reconnect_pause_s = 0
         return coord
 
     _ENABLED = {"ble_reconnect_enabled": True, "ble_reconnect_interval_h": 1}
@@ -642,3 +646,62 @@ class TestScheduledReconnect:
         with patch("asyncio.sleep", new=AsyncMock()):
             await coord._reconnect_cycle()
         assert coord._client.connect.await_count == 2
+
+    async def test_pause_defaults_to_60_minutes(self):
+        coord = self._heater_unpatched_pause()
+        assert coord._reconnect_pause_s == 3600
+
+    async def test_pause_reads_option(self):
+        coord = self._heater_unpatched_pause({**self._ENABLED, "ble_reconnect_pause_min": 5})
+        assert coord._reconnect_pause_s == 300
+
+    def _heater_unpatched_pause(self, options=None):
+        hass = _make_hass()
+        entry = _make_entry()
+        if options is not None:
+            entry.options = options
+        with patch("custom_components.velit.coordinator.VelitHeaterClient"):
+            return VelitHeaterCoordinator(hass, entry)
+
+    async def test_poll_skipped_while_paused(self):
+        coord = self._heater(options=self._ENABLED)
+        coord._client.connected = False
+        coord._reconnect_paused = True
+        coord._last_data = {"machine_state": 0}
+        coord._async_poll = AsyncMock()
+        assert await coord._async_update_data() == {"machine_state": 0}
+        coord._async_poll.assert_not_awaited()
+
+    async def test_poll_resumes_if_connected_during_pause(self):
+        # The BLE switch can reconnect mid-pause; polling must not stay suspended.
+        coord = self._heater(options=self._ENABLED)
+        coord._reconnect_paused = True
+        coord._last_data = {"machine_state": 0}
+        coord._async_poll = AsyncMock(return_value={"machine_state": 0})
+        await coord._async_update_data()
+        coord._async_poll.assert_awaited_once()
+
+    async def test_command_ends_pause_early(self):
+        coord = self._heater(options=self._ENABLED)
+        coord._reconnect_pause_s = 600
+        coord._reconnect_cycle_task = asyncio.create_task(coord._reconnect_cycle())
+        await asyncio.sleep(0)
+        assert coord._reconnect_paused
+        assert coord._client.on_send_while_disconnected == coord._end_reconnect_pause
+        await asyncio.wait_for(coord._end_reconnect_pause(), timeout=1)
+        assert coord._reconnect_cycle_task.done()
+        coord._client.connect.assert_awaited_once()
+        assert coord._reconnect_paused is False
+        assert coord._client.on_send_while_disconnected is None
+
+    async def test_unload_during_pause_clears_hook(self):
+        coord = self._heater(options=self._ENABLED)
+        coord._reconnect_pause_s = 600
+        coord._reconnect_cycle_task = asyncio.create_task(coord._reconnect_cycle())
+        await asyncio.sleep(0)
+        await coord.async_disconnect()
+        with contextlib.suppress(asyncio.CancelledError):
+            await coord._reconnect_cycle_task
+        coord._client.connect.assert_not_awaited()
+        assert coord._reconnect_paused is False
+        assert coord._client.on_send_while_disconnected is None

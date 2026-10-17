@@ -43,6 +43,7 @@ from .const import (
     CONF_POLL_INTERVAL,
     CONF_RECONNECT_ENABLED,
     CONF_RECONNECT_INTERVAL_H,
+    CONF_RECONNECT_PAUSE_MIN,
     CONF_UNAVAILABLE_ON_FAULT,
     DEVICE_TYPE_AC,
     DEVICE_TYPE_HEATER,
@@ -290,6 +291,12 @@ class VelitOptionsFlow(OptionsFlow):
                         default=current.get(CONF_RECONNECT_INTERVAL_H, 24),
                     ): NumberSelector(NumberSelectorConfig(
                         min=1, max=72, step=1, mode=NumberSelectorMode.BOX,
+                    )),
+                    vol.Required(
+                        CONF_RECONNECT_PAUSE_MIN,
+                        default=current.get(CONF_RECONNECT_PAUSE_MIN, 60),
+                    ): NumberSelector(NumberSelectorConfig(
+                        min=1, max=720, step=1, mode=NumberSelectorMode.BOX,
                     )),
                     vol.Required(
                         CONF_UNAVAILABLE_ON_FAULT,

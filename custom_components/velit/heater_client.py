@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 
 from bleak import BLEDevice
 from bleak.backends.characteristic import BleakGATTCharacteristic
@@ -191,6 +192,9 @@ class VelitHeaterClient:
         # Monotonic timestamp of the last successful connect — used by the
         # coordinator's scheduled-reconnect option to measure connection age.
         self.connected_since: float | None = None
+        # Set by the coordinator during a scheduled-reconnect pause. Awaited by
+        # send_command when disconnected so a user command ends the pause.
+        self.on_send_while_disconnected: Callable[[], Awaitable[None]] | None = None
         self._queue_task: asyncio.Task | None = None
         self._reconnect_task: asyncio.Task | None = None
 
@@ -267,6 +271,9 @@ class VelitHeaterClient:
 
         Returns the parsed response dict or None on timeout or connection error.
         """
+        if not self._connected and self.on_send_while_disconnected is not None:
+            await self.on_send_while_disconnected()
+
         if not self._connected:
             _LOGGER.debug("send_command called while not connected")
             return None

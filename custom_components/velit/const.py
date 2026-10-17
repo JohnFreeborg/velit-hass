@@ -7,6 +7,7 @@ CONF_POLL_INTERVAL = "poll_interval"
 CONF_UNAVAILABLE_ON_FAULT = "unavailable_on_fault"
 CONF_RECONNECT_ENABLED = "ble_reconnect_enabled"
 CONF_RECONNECT_INTERVAL_H = "ble_reconnect_interval_h"
+CONF_RECONNECT_PAUSE_MIN = "ble_reconnect_pause_min"
 
 # Device type identifiers stored in config entry data.
 # Determined during config flow — cannot be inferred from BLE advertisement alone (open question).

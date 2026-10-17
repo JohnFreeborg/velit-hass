@@ -31,6 +31,7 @@ from .const import (
     CONF_POLL_INTERVAL,
     CONF_RECONNECT_ENABLED,
     CONF_RECONNECT_INTERVAL_H,
+    CONF_RECONNECT_PAUSE_MIN,
     DOMAIN,
 )
 from .heater_client import VelitHeaterClient
@@ -46,11 +47,13 @@ _ACTIVE_POLL_INTERVAL = timedelta(seconds=5)
 # the connection tests whether long-lived sessions trigger the undocumented
 # display-only Error 16. Disabled by default.
 RECONNECT_INTERVAL_DEFAULT_H = 24  # hours
-# How long the link stays down mid-cycle. A momentary blip would only test
-# cumulative session length; a real disconnected window also covers the theory
-# that the device needs time without a subscriber. Entities are briefly
-# unavailable during the pause, same as toggling the BLE switch.
-_RECONNECT_PAUSE_S = 30
+# How long the link stays down mid-cycle (user-configurable). A momentary blip
+# would only test cumulative session length; a sustained disconnected window
+# also covers the theory that the device needs time without a subscriber.
+# Polls are skipped during the pause and entities hold their last values.
+RECONNECT_PAUSE_DEFAULT_MIN = 60  # minutes
+# How long a user command waits for the link to come back after ending a pause.
+_RECONNECT_WAKE_TIMEOUT_S = 30.0
 # Backoff bounds when the reconnect half of the cycle fails.
 _RECONNECT_RETRY_INITIAL_S = 1.0
 _RECONNECT_RETRY_MAX_S = 30.0
@@ -172,7 +175,13 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
             CONF_RECONNECT_INTERVAL_H, RECONNECT_INTERVAL_DEFAULT_H
         )
         self._reconnect_interval_s: float = float(reconnect_hours) * 3600
+        reconnect_pause_min = entry.options.get(
+            CONF_RECONNECT_PAUSE_MIN, RECONNECT_PAUSE_DEFAULT_MIN
+        )
+        self._reconnect_pause_s: float = float(reconnect_pause_min) * 60
         self._reconnect_cycle_task: asyncio.Task | None = None
+        self._reconnect_paused: bool = False
+        self._reconnect_wake = asyncio.Event()
 
     def register_prime_tick(self, callback) -> None:
         """Register a callback to fire on each prime countdown tick."""
@@ -261,7 +270,13 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
         Tolerates up to _POLL_FAILURE_TOLERANCE consecutive failures before
         marking entities unavailable. On a tolerated failure the last known
         data is returned so the UI stays stable across transient BLE timeouts.
+
+        During a scheduled-reconnect pause the device is deliberately offline,
+        so the poll is skipped and the last known data is returned.
         """
+        if self._reconnect_paused and self._last_data is not None:
+            if not self._client.connected:  # type: ignore[attr-defined]
+                return self._last_data
         try:
             data = await self._async_poll()
         except UpdateFailed as exc:
@@ -324,34 +339,67 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
         self._reconnect_cycle_task = asyncio.create_task(self._reconnect_cycle())
 
     async def _reconnect_cycle(self) -> None:
-        """Disconnect, hold the link down briefly, then reconnect.
+        """Disconnect, hold the link down for the configured pause, then reconnect.
 
-        Retries the reconnect half with backoff — a scheduled cycle must never
-        strand the device disconnected, since a clean disconnect suppresses the
-        client's own unexpected-drop reconnect loop. Cancelled on entry unload.
+        A user command during the pause ends it early (see _end_reconnect_pause)
+        so the device is never left uncontrollable. Retries the reconnect half
+        with backoff — a scheduled cycle must never strand the device
+        disconnected, since a clean disconnect suppresses the client's own
+        unexpected-drop reconnect loop. Cancelled on entry unload.
         """
         client = self._client  # type: ignore[attr-defined]
         _LOGGER.info(
-            "Scheduled reconnect: cycling BLE connection to %s (%.0fs pause)",
+            "Scheduled reconnect: disconnecting %s for %.0f min",
             self._address,
-            float(_RECONNECT_PAUSE_S),
+            self._reconnect_pause_s / 60,
         )
-        await client.disconnect()
-        await asyncio.sleep(_RECONNECT_PAUSE_S)
-        delay = _RECONNECT_RETRY_INITIAL_S
-        while True:
+        client.on_send_while_disconnected = self._end_reconnect_pause
+        self._reconnect_wake.clear()
+        try:
+            self._reconnect_paused = True
             try:
-                await client.connect()
-                return
-            except Exception as exc:
-                _LOGGER.warning(
-                    "Scheduled reconnect to %s failed, retrying in %.0fs: %s",
-                    self._address,
-                    delay,
-                    exc,
-                )
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, _RECONNECT_RETRY_MAX_S)
+                await client.disconnect()
+                try:
+                    await asyncio.wait_for(
+                        self._reconnect_wake.wait(), timeout=self._reconnect_pause_s
+                    )
+                    _LOGGER.info(
+                        "Scheduled reconnect: pause for %s ended early by a command",
+                        self._address,
+                    )
+                except asyncio.TimeoutError:
+                    pass
+            finally:
+                self._reconnect_paused = False
+            delay = _RECONNECT_RETRY_INITIAL_S
+            while True:
+                try:
+                    await client.connect()
+                    _LOGGER.info("Scheduled reconnect: reconnected to %s", self._address)
+                    return
+                except Exception as exc:
+                    _LOGGER.warning(
+                        "Scheduled reconnect to %s failed, retrying in %.0fs: %s",
+                        self._address,
+                        delay,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, _RECONNECT_RETRY_MAX_S)
+        finally:
+            client.on_send_while_disconnected = None
+
+    async def _end_reconnect_pause(self) -> None:
+        """End a scheduled-reconnect pause and wait briefly for the link.
+
+        Called by the client when a command is sent while disconnected. If the
+        reconnect does not complete in time the command fails as it would on
+        any other disconnect.
+        """
+        self._reconnect_wake.set()
+        task = self._reconnect_cycle_task
+        if task is not None and not task.done():
+            await asyncio.wait({task}, timeout=_RECONNECT_WAKE_TIMEOUT_S)
 
     def _update_fault_issue(self, data: dict) -> None:
         """Raise or clear a Repairs issue based on the current fault code.
@@ -446,7 +494,11 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
     async def _async_update_data(self) -> dict:
         data = await super()._async_update_data()
         self._adjust_poll_interval(data.get("machine_state", 0))
-        if self.firmware_version is None and self._fw_query_attempts < 3:
+        if (
+            self.firmware_version is None
+            and self._fw_query_attempts < 3
+            and not self._reconnect_paused
+        ):
             await self._async_query_firmware_version()
         # Track cleaning cycle completion.
         # Only clear once the device has confirmed it left Standby (cycle started)

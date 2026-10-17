@@ -156,3 +156,27 @@ class TestACUnavailableRecovery:
         result = await client._execute_with_retry(0x01, b"\x00")
         assert result is None
         assert client.unavailable is True
+
+
+# ---------------------------------------------------------------------------
+# Scheduled-reconnect pause hook
+# ---------------------------------------------------------------------------
+
+
+class TestSendWhileDisconnectedHook:
+    async def test_heater_awaits_hook_when_disconnected(self):
+        client = VelitHeaterClient(MagicMock(), ADDRESS)
+        client.on_send_while_disconnected = AsyncMock()
+        assert await client.send_command(0x0A, b"\x00") is None
+        client.on_send_while_disconnected.assert_awaited_once()
+
+    async def test_ac_awaits_hook_when_disconnected(self):
+        client = VelitACClient(MagicMock(), ADDRESS)
+        client.on_send_while_disconnected = AsyncMock()
+        assert await client.send_command(0x01, b"\x00") is None
+        client.on_send_while_disconnected.assert_awaited_once()
+
+    async def test_heater_without_hook_returns_none(self):
+        client = VelitHeaterClient(MagicMock(), ADDRESS)
+        assert await client.send_command(0x0A, b"\x00") is None
+
