@@ -58,7 +58,7 @@
         "title": "Velit Options",
         "data": {
           "poll_interval": "Poll interval (seconds)",
-          "ble_reconnect_enabled": "Periodic BLE reconnect (Error 16 experiment)",
+          "ble_reconnect_enabled": "Periodic BLE reconnect",
           "ble_reconnect_interval_h": "Reconnect interval (hours)",
           "ble_reconnect_pause_min": "Disconnected period (minutes)",
           "unavailable_on_fault": "Show device as unavailable when fault is active"
