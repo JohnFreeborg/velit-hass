@@ -64,7 +64,7 @@
           "unavailable_on_fault": "Show device as unavailable when fault is active"
         },
         "data_description": {
-          "ble_reconnect_enabled": "Experimental: periodically drop and re-establish the Bluetooth connection while the device is idle. The device stays disconnected for the configured period; entities hold their last values and any command reconnects immediately."
+          "ble_reconnect_enabled": "Experimental: periodically drop and re-establish the Bluetooth connection. Skipped during priming, cleaning, and right after a command. The device stays disconnected for the configured period; entities hold their last values and any command reconnects immediately."
         }
       }
     }

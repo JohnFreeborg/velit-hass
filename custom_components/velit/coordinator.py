@@ -315,8 +315,8 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
     def _reconnect_allowed(self, data: dict) -> bool:
         """Device-specific gate for the scheduled reconnect cycle.
 
-        Subclasses narrow this to settled/idle states so the connection is
-        never cycled while the device is doing something a user would notice.
+        Subclasses block it only while the integration itself is driving a
+        sequence that depends on polling (prime, cleaning, post-command window).
         """
         return True
 
@@ -327,7 +327,7 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
         is that the integration's long-lived BLE connection triggers it, unlike
         the Velit app's short sessions. Cycling the connection at a user-set
         interval tests that. Runs only when enabled, connected past the
-        configured age, no cycle already in flight, and the device is idle.
+        configured age, no cycle already in flight, and the device gate allows it.
         """
         if not self._reconnect_enabled:
             return
@@ -538,15 +538,14 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
         return data
 
     def _reconnect_allowed(self, data: dict) -> bool:
-        """Only cycle the connection while the heater is settled in Standby.
+        """Cycle in any machine state except integration-driven sequences.
 
-        Error 16 appears on idle devices, so restricting the cycle to Standby
-        loses nothing — and guarantees a running burner, prime countdown, or
-        cleaning cycle is never interrupted by a scheduled disconnect.
+        The heater runs on its own controller, and any command ends the pause,
+        so a running burner keeps full control. A prime countdown, cleaning
+        cycle, or post-command window relies on polling and is never interrupted.
         """
         return (
-            data.get("machine_state") == 0
-            and not self.priming
+            not self.priming
             and not self.cleaning
             and self._post_command_fast_polls == 0
         )
@@ -671,13 +670,11 @@ class VelitACCoordinator(_VelitBaseCoordinator):
         return data
 
     def _reconnect_allowed(self, data: dict) -> bool:
-        """Only cycle the connection while the AC is powered off.
+        """Cycle whether the AC is on or off, outside the post-command window.
 
-        Error 16 is a heater phenomenon, but the option is available on both
-        device types; gating on power-off ensures active cooling is never
-        interrupted by a scheduled disconnect.
+        Any command ends the pause, so active cooling keeps full control.
         """
-        return data.get("power") == 0x01 and self._post_command_fast_polls == 0
+        return self._post_command_fast_polls == 0
 
     async def _async_poll(self) -> dict:
         power_rsp = await self._client.send_command(0x01, bytes([0x00]))

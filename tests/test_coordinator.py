@@ -595,10 +595,25 @@ class TestScheduledReconnect:
         coord._client.disconnect.assert_awaited_once()
         coord._client.connect.assert_awaited_once()
 
-    async def test_blocked_while_heater_running(self):
+    async def test_cycles_while_heater_running(self):
         coord = self._heater(options=self._ENABLED)
         with patch("custom_components.velit.coordinator.time.monotonic", return_value=3601.0):
             coord._maybe_schedule_reconnect({"machine_state": 1})
+            assert coord._reconnect_cycle_task is not None
+            await coord._reconnect_cycle_task
+
+    async def test_blocked_while_cleaning(self):
+        coord = self._heater(options=self._ENABLED)
+        coord.cleaning = True
+        with patch("custom_components.velit.coordinator.time.monotonic", return_value=3601.0):
+            coord._maybe_schedule_reconnect({"machine_state": 4})
+        assert coord._reconnect_cycle_task is None
+
+    async def test_blocked_in_post_command_window(self):
+        coord = self._heater(options=self._ENABLED)
+        coord._post_command_fast_polls = 3
+        with patch("custom_components.velit.coordinator.time.monotonic", return_value=3601.0):
+            coord._maybe_schedule_reconnect({"machine_state": 0})
         assert coord._reconnect_cycle_task is None
 
     async def test_blocked_while_priming(self):
@@ -624,11 +639,12 @@ class TestScheduledReconnect:
             coord._maybe_schedule_reconnect({"machine_state": 0})
         assert coord._reconnect_cycle_task is running
 
-    async def test_ac_blocked_while_powered_on(self):
+    async def test_ac_cycles_while_powered_on(self):
         coord = self._ac(options=self._ENABLED)
         with patch("custom_components.velit.coordinator.time.monotonic", return_value=3601.0):
             coord._maybe_schedule_reconnect({"power": 0x02})
-        assert coord._reconnect_cycle_task is None
+            assert coord._reconnect_cycle_task is not None
+            await coord._reconnect_cycle_task
 
     async def test_ac_cycles_when_powered_off(self):
         coord = self._ac(options=self._ENABLED)
