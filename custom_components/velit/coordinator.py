@@ -64,9 +64,11 @@ _RECONNECT_RETRY_MAX_S = 30.0
 _POLL_FAILURE_TOLERANCE = 2
 
 # Machine states that warrant faster polling — device is mid-transition.
-# Settled states: 0 (Standby), 1 (Normal). Transitional states per protocol doc;
-# actual device behaviour during cleaning and cooldown must be validated on hardware.
-_ACTIVE_MACHINE_STATES = {2, 3, 4, 5}  # Cooling Down, Overtemp Standby, Cleaning, Clean Complete
+# Settled states: 0 (Standby), 1 (Normal), 3 (Overtemp Standby). Overtemp Standby
+# is the thermostat idling the burner at setpoint and can last 40+ minutes
+# (observed 2026-10-17), so polling it at 5s only adds BLE load.
+# Actual device behaviour during cleaning and cooldown must be validated on hardware.
+_ACTIVE_MACHINE_STATES = {2, 4, 5}  # Cooling Down, Cleaning, Clean Complete
 
 # Setpoint ranges used to infer whether the device is in Celsius or Fahrenheit mode.
 # These ranges are non-overlapping so the unit can be determined unambiguously.
