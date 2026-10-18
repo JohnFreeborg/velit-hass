@@ -17,6 +17,7 @@ hardware verification confirms a reliable automatic detection method.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import voluptuous as vol
@@ -50,6 +51,13 @@ _VELIT_NAME_PREFIXES = ("VELIT", "VLIT", "D30", "KT2")
 # advertisements. Some firmware versions advertise with the MAC as the local
 # name rather than a VELIT* prefix — manufacturer ID is the reliable fallback.
 _VELIT_MANUFACTURER_ID = 22618
+
+# Manual-entry address formats: a MAC address (Linux/HAOS BlueZ) or a
+# CoreBluetooth UUID (HA running on macOS, where bleak does not expose MACs).
+_MAC_ADDRESS_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
+_COREBLUETOOTH_UUID_RE = re.compile(
+    r"^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$"
+)
 
 
 class VelitConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -171,18 +179,30 @@ class VelitConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manual address entry fallback when BT scan finds no devices."""
+        """Manual address entry fallback when BT scan finds no devices.
+
+        Validates the address format before creating the unique ID — a
+        malformed address would otherwise produce an entry that can never
+        connect, stuck in a setup retry loop.
+        """
+        errors: dict[str, str] = {}
         if user_input is not None:
-            address = user_input[CONF_ADDRESS]
-            await self.async_set_unique_id(address)
-            self._abort_if_unique_id_configured()
-            self._address = address
-            self._name = address
-            return await self.async_step_device_type()
+            address = user_input[CONF_ADDRESS].strip()
+            if _MAC_ADDRESS_RE.match(address):
+                address = address.upper()
+            elif not _COREBLUETOOTH_UUID_RE.match(address):
+                errors["base"] = "invalid_address"
+            if not errors:
+                await self.async_set_unique_id(address)
+                self._abort_if_unique_id_configured()
+                self._address = address
+                self._name = address
+                return await self.async_step_device_type()
 
         return self.async_show_form(
             step_id="manual",
             data_schema=vol.Schema({vol.Required(CONF_ADDRESS): str}),
+            errors=errors,
         )
 
     # ------------------------------------------------------------------
