@@ -10,6 +10,9 @@ AC sensors:
   - Inlet temperature (always Celsius — AC protocol encodes inlet as raw °C)
   - Fault code (human-readable string)
 
+Both device types, only while the scheduled reconnect option is enabled:
+  - Last scheduled reconnect (timestamp)
+
 All temperature sensors report in Celsius — the coordinator converts from
 the device's active unit before storing values in the data dict.
 """
@@ -119,6 +122,11 @@ async def async_setup_entry(
             for description in AC_SENSORS
         ])
 
+    # Changing options reloads the entry, so the sensor appears and disappears
+    # with the option.
+    if coordinator._reconnect_enabled:
+        async_add_entities([VelitLastReconnectSensor(coordinator, entry)])
+
 
 class VelitHeaterSensorEntity(CoordinatorEntity[VelitHeaterCoordinator], SensorEntity):
     """A single sensor entity reading from the heater coordinator data dict."""
@@ -213,3 +221,29 @@ class VelitACSensorEntity(CoordinatorEntity[VelitACCoordinator], SensorEntity):
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get(self.entity_description.data_key)
+
+
+class VelitLastReconnectSensor(CoordinatorEntity, SensorEntity):
+    """Completion time of the most recent scheduled BLE reconnect cycle.
+
+    Unknown until the first cycle completes after setup. Lets testers line
+    cycles up against Error 16/17 onsets without reading the log.
+    """
+
+    _attr_name = "Last Scheduled Reconnect"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:bluetooth-transfer"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.data['address']}_last_scheduled_reconnect"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.data["address"])},
+            name=entry.data.get(CONF_NAME, entry.data["address"]),
+            manufacturer="Velit",
+        )
+
+    @property
+    def native_value(self):
+        return self.coordinator.last_scheduled_reconnect

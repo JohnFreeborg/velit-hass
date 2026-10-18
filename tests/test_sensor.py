@@ -5,6 +5,7 @@ All coordinator access is mocked — no hardware or BLE required.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +16,8 @@ from custom_components.velit.sensor import (
     HEATER_SENSORS,
     VelitACSensorEntity,
     VelitHeaterSensorEntity,
+    VelitLastReconnectSensor,
+    async_setup_entry,
 )
 
 
@@ -198,3 +201,43 @@ class TestACSensorFault:
         entity = _make_ac_sensor(description, _make_ac_data())
         entity.coordinator.data = None
         assert entity.native_value is None
+
+
+# ---------------------------------------------------------------------------
+# Last scheduled reconnect sensor
+# ---------------------------------------------------------------------------
+
+
+class TestLastReconnectSensor:
+    def _entry(self, device_type="heater"):
+        entry = MagicMock()
+        entry.data = {"address": "AA:BB:CC:DD:EE:FF", "name": "Test", "device_type": device_type}
+        return entry
+
+    async def _setup(self, enabled, device_type="heater"):
+        entry = self._entry(device_type)
+        entry.runtime_data = MagicMock()
+        entry.runtime_data._reconnect_enabled = enabled
+        added = []
+        await async_setup_entry(MagicMock(), entry, lambda ents: added.extend(ents))
+        return added
+
+    async def test_added_when_reconnect_enabled(self):
+        added = await self._setup(enabled=True)
+        assert any(isinstance(e, VelitLastReconnectSensor) for e in added)
+
+    async def test_absent_when_reconnect_disabled(self):
+        added = await self._setup(enabled=False)
+        assert not any(isinstance(e, VelitLastReconnectSensor) for e in added)
+
+    async def test_added_for_ac(self):
+        added = await self._setup(enabled=True, device_type="ac")
+        assert any(isinstance(e, VelitLastReconnectSensor) for e in added)
+
+    def test_reports_coordinator_timestamp(self):
+        coord = MagicMock()
+        stamp = datetime(2026, 10, 17, 18, 0, tzinfo=timezone.utc)
+        coord.last_scheduled_reconnect = stamp
+        sensor = VelitLastReconnectSensor(coord, self._entry())
+        assert sensor.native_value == stamp
+        assert sensor.unique_id == "AA:BB:CC:DD:EE:FF_last_scheduled_reconnect"

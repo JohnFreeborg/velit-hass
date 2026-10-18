@@ -705,3 +705,15 @@ class TestScheduledReconnect:
         coord._client.connect.assert_not_awaited()
         assert coord._reconnect_paused is False
         assert coord._client.on_send_while_disconnected is None
+
+    async def test_cycle_refreshes_entities_and_records_time(self):
+        coord = self._heater(options=self._ENABLED)
+        coord.async_update_listeners = MagicMock()
+        await coord._reconnect_cycle()
+        # Once after the disconnect (switch shows off), once after reconnect.
+        assert coord.async_update_listeners.call_count == 2
+        assert coord.last_scheduled_reconnect is not None
+
+    async def test_last_reconnect_unset_until_cycle_completes(self):
+        coord = self._heater(options=self._ENABLED)
+        assert coord.last_scheduled_reconnect is None

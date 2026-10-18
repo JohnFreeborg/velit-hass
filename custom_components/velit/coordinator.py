@@ -18,13 +18,14 @@ import asyncio
 import logging
 import time
 from abc import abstractmethod
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .ac_client import VelitACClient
 from .const import (
@@ -182,6 +183,9 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
         self._reconnect_cycle_task: asyncio.Task | None = None
         self._reconnect_paused: bool = False
         self._reconnect_wake = asyncio.Event()
+        # Completion time of the last scheduled cycle — exposed as a diagnostic
+        # sensor so testers can line cycles up against Error 16/17 onsets.
+        self.last_scheduled_reconnect: datetime | None = None
 
     def register_prime_tick(self, callback) -> None:
         """Register a callback to fire on each prime countdown tick."""
@@ -359,6 +363,9 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
             self._reconnect_paused = True
             try:
                 await client.disconnect()
+                # Entity state only refreshes when poll data changes; push the
+                # disconnect so the BLE Connection switch records the pause.
+                self.async_update_listeners()
                 try:
                     await asyncio.wait_for(
                         self._reconnect_wake.wait(), timeout=self._reconnect_pause_s
@@ -376,6 +383,8 @@ class _VelitBaseCoordinator(DataUpdateCoordinator):
                 try:
                     await client.connect()
                     _LOGGER.info("Scheduled reconnect: reconnected to %s", self._address)
+                    self.last_scheduled_reconnect = dt_util.utcnow()
+                    self.async_update_listeners()
                     return
                 except Exception as exc:
                     _LOGGER.warning(
