@@ -156,3 +156,43 @@ class TestACUnavailableRecovery:
         result = await client._execute_with_retry(0x01, b"\x00")
         assert result is None
         assert client.unavailable is True
+
+
+# ---------------------------------------------------------------------------
+# Heater query retry
+# ---------------------------------------------------------------------------
+
+
+class TestHeaterQueryRetry:
+    async def _run(self, func, responses):
+        client = VelitHeaterClient(MagicMock(), ADDRESS)
+        client._connected = True
+        client._write_and_wait = AsyncMock(side_effect=responses)
+        runner = asyncio.create_task(client._queue_runner())
+        try:
+            result = await client.send_command(func, b"\x00")
+        finally:
+            client._connected = False
+            await runner
+        return client, result
+
+    async def test_query_retried_once_after_miss(self):
+        ok = {"func": 0x0A, "data": b"\x01"}
+        client, result = await self._run(0x0A, [None, ok])
+        assert result == ok
+        assert client._write_and_wait.await_count == 2
+
+    async def test_query_gives_up_after_one_retry(self):
+        client, result = await self._run(0x0B, [None, None])
+        assert result is None
+        assert client._write_and_wait.await_count == 2
+
+    async def test_control_command_never_retried(self):
+        client, result = await self._run(0x01, [None, {"func": 0x01}])
+        assert result is None
+        assert client._write_and_wait.await_count == 1
+
+    async def test_successful_query_not_retried(self):
+        client, _ = await self._run(0x0A, [{"func": 0x0A, "data": b"\x01"}])
+        assert client._write_and_wait.await_count == 1
+
