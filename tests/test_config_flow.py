@@ -286,3 +286,34 @@ async def test_user_flow_duplicate_aborts(hass: HomeAssistant) -> None:
     )
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "already_configured"
+
+
+# ---------------------------------------------------------------------------
+# Options flow
+# ---------------------------------------------------------------------------
+
+
+async def _options_keys(hass: HomeAssistant, device_type: str) -> set[str]:
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ADDRESS: HEATER_ADDRESS, CONF_NAME: "Test", "device_type": device_type},
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    return {str(key) for key in result["data_schema"].schema}
+
+
+async def test_options_heater_shows_self_heal(hass: HomeAssistant) -> None:
+    keys = await _options_keys(hass, DEVICE_TYPE_HEATER)
+    assert {
+        "self_heal_enabled", "self_heal_hours", "self_heal_ref_entity", "self_heal_ref_delta",
+        "self_heal_altitude", "self_heal_alt_delta",
+    } <= keys
+
+
+async def test_options_ac_hides_self_heal(hass: HomeAssistant) -> None:
+    keys = await _options_keys(hass, DEVICE_TYPE_AC)
+    assert not any(key.startswith("self_heal") for key in keys)

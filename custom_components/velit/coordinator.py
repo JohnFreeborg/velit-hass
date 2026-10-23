@@ -15,17 +15,35 @@ Temperature unit detection (on first connect):
 from __future__ import annotations
 
 import logging
+import time
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 from abc import abstractmethod
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import ATTR_UNIT_OF_MEASUREMENT, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .ac_client import VelitACClient
-from .const import CONF_POLL_INTERVAL, DOMAIN
+from .const import (
+    CONF_POLL_INTERVAL,
+    CONF_SELF_HEAL_ALT_DELTA,
+    CONF_SELF_HEAL_ALTITUDE,
+    CONF_SELF_HEAL_ENABLED,
+    CONF_SELF_HEAL_HOURS,
+    CONF_SELF_HEAL_REF_DELTA,
+    CONF_SELF_HEAL_REF_ENTITY,
+    DOMAIN,
+    SELF_HEAL_ALT_DELTA_FT,
+    SELF_HEAL_ALT_DELTA_M,
+    SELF_HEAL_HOURS_DEFAULT,
+    SELF_HEAL_REF_DELTA_C,
+    SELF_HEAL_REF_DELTA_F,
+)
 from .heater_client import VelitHeaterClient
 from .packet_utils import fahrenheit_to_celsius
 
@@ -58,6 +76,23 @@ _FAHRENHEIT_SETPOINT_MAX = 99
 _MAX_ALTITUDE_M = 9000   # metres — above Everest (8849 m)
 _MAX_ALTITUDE_FT = 30000 # feet   — above Everest (29032 ft)
 
+# Error 16 self-heal (opt-in). The heater shows Error 16 on its LCD without
+# reporting it over BLE; while it is up, the inlet reading stops changing
+# (voltage and altitude stay live). Re-sending the current setpoint clears it.
+# A freeze is inferred from the inlet holding still in Standby, confirmed by
+# time, an optional reference sensor, or an altitude change.
+_SELF_HEAL_MIN_GAP_S = 3600       # never re-send more than once an hour
+# Thresholds are compared as exact fractions in the user's unit. Only
+# differences are compared, so unit offsets drop out and conversions are
+# exact scale factors (a temperature step of 1 °F is exactly 5/9 °C; the
+# international foot is exactly 0.3048 m).
+_TEMP_STEP_IN_C = {
+    UnitOfTemperature.CELSIUS: Fraction(1),
+    UnitOfTemperature.KELVIN: Fraction(1),
+    UnitOfTemperature.FAHRENHEIT: Fraction(5, 9),
+}
+_M_PER_FT = Fraction(3048, 10000)
+
 # Heater fault codes from protocol V1.02.
 HEATER_FAULT_CODES: dict[int, str] = {
     0: "No Fault",
@@ -87,6 +122,15 @@ HEATER_MACHINE_STATES: dict[int, str] = {
     4: "Cleaning",
     5: "Clean Complete",
 }
+
+
+def _exact(value) -> Fraction | None:
+    """Parse a state string or option value exactly; None if not a finite number."""
+    try:
+        number = Decimal(str(value))
+    except InvalidOperation:
+        return None
+    return Fraction(number) if number.is_finite() else None
 
 
 def _validate_altitude(raw: int, unit: str) -> int | None:
@@ -298,6 +342,7 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
       work_mode         int     — 1 = Manual, 2 = Thermostat
       current_gear      int     — 1–5
       set_temp_c        float   — target temperature in Celsius
+      set_temp_raw      int     — setpoint byte as the device reports it
       machine_state     int     — raw machine state code
       machine_state_str str     — human-readable machine state
       heater_power_w    int     — heater power in Watts
@@ -308,6 +353,7 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
       casing_temp_c     float | None  — casing temperature in Celsius (None if unavailable)
       outlet_temp_c     float | None  — outlet temperature in Celsius (None if unavailable)
       altitude          int | None    — altitude in device unit (None if unavailable)
+      inlet_raw         int     — raw inlet word, for freeze detection
     """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -317,6 +363,31 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
         # Populated on first successful poll via func 0x6A. Exposed as sw_version
         # in DeviceInfo. None until queried; remains None if the query fails.
         self.firmware_version: str | None = None
+        # Error 16 self-heal — see _maybe_self_heal.
+        self.self_heal_enabled: bool = entry.options.get(CONF_SELF_HEAL_ENABLED, False)
+        self._self_heal_window_s: float = (
+            float(entry.options.get(CONF_SELF_HEAL_HOURS, SELF_HEAL_HOURS_DEFAULT)) * 3600
+        )
+        self._self_heal_ref_entity: str | None = entry.options.get(CONF_SELF_HEAL_REF_ENTITY) or None
+        self._self_heal_altitude: bool = entry.options.get(CONF_SELF_HEAL_ALTITUDE, False)
+        # Thresholds are entered in the HA system unit: °F and ft, or °C and m.
+        self._self_heal_unit: str = hass.config.units.temperature_unit
+        imperial = self._self_heal_unit == UnitOfTemperature.FAHRENHEIT
+        self._self_heal_ref_delta = _exact(entry.options.get(
+            CONF_SELF_HEAL_REF_DELTA, SELF_HEAL_REF_DELTA_F if imperial else SELF_HEAL_REF_DELTA_C
+        ))
+        self._self_heal_alt_delta = _exact(entry.options.get(
+            CONF_SELF_HEAL_ALT_DELTA, SELF_HEAL_ALT_DELTA_FT if imperial else SELF_HEAL_ALT_DELTA_M
+        ))
+        self._self_heal_alt_imperial: bool = imperial
+        self._freeze_inlet: int | None = None
+        self._freeze_since: float = 0.0
+        self._freeze_ref: tuple[Fraction, str] | None = None  # (reading, unit)
+        self._freeze_alt_min: int | None = None
+        self._freeze_alt_max: int | None = None
+        self._last_self_heal_mono: float | None = None
+        self.last_self_heal: datetime | None = None
+        self.last_self_heal_trigger: str | None = None
 
     async def _async_query_firmware_version(self) -> None:
         """Query device firmware version via func 0x6A and cache the result.
@@ -379,7 +450,114 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
         if q2 is None:
             raise UpdateFailed("No response to Query 2 (0x0B)")
 
-        return self._parse(q1["data"], q2["data"])
+        data = self._parse(q1["data"], q2["data"])
+        # Evaluated here rather than in _async_update_data so only fresh polls
+        # count — stale data returned on a tolerated failure would look frozen.
+        if self.self_heal_enabled:
+            await self._maybe_self_heal(data)
+        return data
+
+    def _ref_reading(self) -> tuple[Fraction, str] | None:
+        """Reference sensor reading as an exact value in its own unit, or None."""
+        if self._self_heal_ref_entity is None:
+            return None
+        state = self.hass.states.get(self._self_heal_ref_entity)
+        if state is None:
+            return None
+        unit = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+        if unit not in _TEMP_STEP_IN_C:
+            return None
+        value = _exact(state.state)
+        return None if value is None else (value, unit)
+
+    def _ref_moved(self) -> bool:
+        """True when the reference has moved by the threshold since freeze start."""
+        current = self._ref_reading()
+        if current is None or self._freeze_ref is None:
+            return False
+        (start, start_unit), (now, unit) = self._freeze_ref, current
+        if unit != start_unit:
+            # Sensor unit changed mid-freeze: restart its baseline.
+            self._freeze_ref = current
+            return False
+        moved = abs(now - start) * _TEMP_STEP_IN_C[unit] / _TEMP_STEP_IN_C[self._self_heal_unit]
+        return moved >= self._self_heal_ref_delta
+
+    def _altitude_moved(self) -> bool:
+        """True when the altitude range since freeze start reaches the threshold."""
+        if self._freeze_alt_min is None:
+            return False
+        span = Fraction(self._freeze_alt_max - self._freeze_alt_min)
+        device_ft = self.temp_unit == UnitOfTemperature.FAHRENHEIT
+        if device_ft != self._self_heal_alt_imperial:
+            # Device reports in the other unit: scale the span to the user's unit.
+            span = span * _M_PER_FT if device_ft else span / _M_PER_FT
+        return span >= self._self_heal_alt_delta
+
+    async def _maybe_self_heal(self, data: dict) -> None:
+        """Re-send the current setpoint when the inlet reading looks frozen.
+
+        Only Standby counts, and never during a prime, cleaning cycle, or
+        post-command window. The freeze baseline restarts whenever the inlet
+        changes or an ineligible poll intervenes; a command sets the
+        post-command window, so commands restart it too.
+        """
+        now = time.monotonic()
+        inlet = data["inlet_raw"]
+        altitude = data["altitude"]
+        eligible = (
+            data["machine_state"] == 0
+            and not self.priming
+            and not self.cleaning
+            and self._post_command_fast_polls == 0
+            and inlet != 0xFFFF
+        )
+        if not eligible or inlet != self._freeze_inlet:
+            self._freeze_inlet = inlet if eligible else None
+            self._freeze_since = now
+            self._freeze_ref = self._ref_reading()
+            self._freeze_alt_min = self._freeze_alt_max = altitude
+            return
+
+        if altitude is not None:
+            self._freeze_alt_min = altitude if self._freeze_alt_min is None else min(self._freeze_alt_min, altitude)
+            self._freeze_alt_max = altitude if self._freeze_alt_max is None else max(self._freeze_alt_max, altitude)
+        if self._freeze_ref is None:
+            self._freeze_ref = self._ref_reading()
+
+        frozen_s = now - self._freeze_since
+        trigger = None
+        if frozen_s >= self._self_heal_window_s:
+            trigger = "time"
+        elif self._ref_moved():
+            trigger = "reference sensor"
+        elif self._self_heal_altitude and self._altitude_moved():
+            trigger = "altitude"
+        if trigger is None:
+            return
+        if (
+            self._last_self_heal_mono is not None
+            and now - self._last_self_heal_mono < _SELF_HEAL_MIN_GAP_S
+        ):
+            return
+
+        self._last_self_heal_mono = now
+        setpoint_raw = data["set_temp_raw"]
+        try:
+            await self._client.send_command(0x08, bytes([setpoint_raw]))
+        except Exception as exc:
+            _LOGGER.warning("Self-heal setpoint re-send failed: %s", exc)
+            return
+        _LOGGER.info(
+            "Self-heal: heater inlet unchanged %.1f h (trigger: %s), re-sent setpoint %d",
+            frozen_s / 3600, trigger, setpoint_raw,
+        )
+        self.last_self_heal = dt_util.utcnow()
+        self.last_self_heal_trigger = trigger
+        self._post_command_fast_polls = 6
+        # Start a fresh baseline: if the inlet stays frozen the next attempt
+        # waits a full window (or a fresh reference/altitude change).
+        self._freeze_inlet = None
 
     def _parse(self, q1_data: bytes, q2_data: bytes) -> dict:
         """Parse Query 1 and Query 2 data payloads into a normalised data dict."""
@@ -437,6 +615,7 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
             "work_mode": work_mode,
             "current_gear": current_gear,
             "set_temp_c": set_temp_c,
+            "set_temp_raw": set_temp_raw,
             "machine_state": machine_state,
             "machine_state_str": HEATER_MACHINE_STATES.get(machine_state, f"Unknown ({machine_state})"),
             "heater_power_w": heater_power_w,
@@ -447,6 +626,7 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
             "casing_temp_c": self.to_celsius(casing_native) if casing_native is not None else None,
             "outlet_temp_c": self.to_celsius(outlet_native) if outlet_native is not None else None,
             "altitude": _validate_altitude(alt_raw, self.temp_unit),
+            "inlet_raw": inlet_raw,
         }
 
 
