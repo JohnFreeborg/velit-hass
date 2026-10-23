@@ -5,6 +5,20 @@ DOMAIN = "velit"
 # Options keys — stored in config entry options dict.
 CONF_POLL_INTERVAL = "poll_interval"
 CONF_UNAVAILABLE_ON_FAULT = "unavailable_on_fault"
+# Error 16 self-heal (heater only) — see VelitHeaterCoordinator._maybe_self_heal.
+CONF_SELF_HEAL_ENABLED = "self_heal_enabled"
+CONF_SELF_HEAL_HOURS = "self_heal_hours"
+CONF_SELF_HEAL_REF_ENTITY = "self_heal_ref_entity"
+CONF_SELF_HEAL_ALTITUDE = "self_heal_altitude"
+CONF_SELF_HEAL_REF_DELTA = "self_heal_ref_delta"
+CONF_SELF_HEAL_ALT_DELTA = "self_heal_alt_delta"
+SELF_HEAL_HOURS_DEFAULT = 3
+# Trigger thresholds are entered in the HA system unit: °F and ft when HA uses
+# Fahrenheit, °C and m otherwise. Parked altitude jitter is about ±10 ft.
+SELF_HEAL_REF_DELTA_F = 5
+SELF_HEAL_REF_DELTA_C = 3
+SELF_HEAL_ALT_DELTA_FT = 100
+SELF_HEAL_ALT_DELTA_M = 30
 
 # Device type identifiers stored in config entry data.
 # Determined during config flow — cannot be inferred from BLE advertisement alone (open question).

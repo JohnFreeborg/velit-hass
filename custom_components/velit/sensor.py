@@ -5,6 +5,7 @@ Heater sensors (all sourced from coordinator data):
   - Altitude
   - Fault code (human-readable string)
   - Machine state (human-readable string)
+  - Last self-heal (timestamp, only while the Error 16 self-heal option is on)
 
 AC sensors:
   - Inlet temperature (always Celsius — AC protocol encodes inlet as raw °C)
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -113,6 +115,8 @@ async def async_setup_entry(
               for description in HEATER_SENSORS),
             VelitHeaterPrimeCountdownSensor(coordinator, entry),
         ])
+        if coordinator.self_heal_enabled:
+            async_add_entities([VelitLastSelfHealSensor(coordinator, entry)])
     elif entry.data["device_type"] == DEVICE_TYPE_AC:
         async_add_entities([
             VelitACSensorEntity(coordinator, entry, description)
@@ -186,6 +190,40 @@ class VelitHeaterPrimeCountdownSensor(SensorEntity):
     @property
     def native_value(self) -> int:
         return self._coordinator.prime_remaining
+
+
+class VelitLastSelfHealSensor(CoordinatorEntity[VelitHeaterCoordinator], SensorEntity):
+    """Time of the most recent Error 16 self-heal setpoint re-send.
+
+    Created only while the self-heal option is enabled. The trigger that fired
+    (time, reference sensor, or altitude) is exposed as an attribute.
+    """
+
+    _attr_name = "Last Self-heal"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:bandage"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(
+        self,
+        coordinator: VelitHeaterCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.data['address']}_last_self_heal"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.data["address"])},
+            name=entry.data.get(CONF_NAME, entry.data["address"]),
+            manufacturer="Velit",
+        )
+
+    @property
+    def native_value(self) -> datetime | None:
+        return self.coordinator.last_self_heal
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        return {"trigger": self.coordinator.last_self_heal_trigger}
 
 
 class VelitACSensorEntity(CoordinatorEntity[VelitACCoordinator], SensorEntity):

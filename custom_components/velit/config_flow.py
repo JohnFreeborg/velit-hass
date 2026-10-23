@@ -27,9 +27,11 @@ from homeassistant.components.bluetooth import (
     async_discovered_service_info,
 )
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
-from homeassistant.const import CONF_ADDRESS, CONF_NAME
+from homeassistant.const import CONF_ADDRESS, CONF_NAME, UnitOfTemperature
 from homeassistant.helpers.selector import (
     BooleanSelector,
+    EntitySelector,
+    EntitySelectorConfig,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -39,7 +41,25 @@ from homeassistant.helpers.selector import (
     TextSelector,
 )
 
-from .const import CONF_POLL_INTERVAL, CONF_UNAVAILABLE_ON_FAULT, DEVICE_TYPE_AC, DEVICE_TYPE_HEATER, DOMAIN, UUID_SERVICE
+from .const import (
+    CONF_POLL_INTERVAL,
+    CONF_SELF_HEAL_ALT_DELTA,
+    CONF_SELF_HEAL_ALTITUDE,
+    CONF_SELF_HEAL_ENABLED,
+    CONF_SELF_HEAL_HOURS,
+    CONF_SELF_HEAL_REF_DELTA,
+    CONF_SELF_HEAL_REF_ENTITY,
+    CONF_UNAVAILABLE_ON_FAULT,
+    DEVICE_TYPE_AC,
+    DEVICE_TYPE_HEATER,
+    DOMAIN,
+    SELF_HEAL_ALT_DELTA_FT,
+    SELF_HEAL_ALT_DELTA_M,
+    SELF_HEAL_HOURS_DEFAULT,
+    SELF_HEAL_REF_DELTA_C,
+    SELF_HEAL_REF_DELTA_F,
+    UUID_SERVICE,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -261,20 +281,60 @@ class VelitOptionsFlow(OptionsFlow):
             return self.async_create_entry(data=user_input)
 
         current = self._config_entry.options
-        return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_POLL_INTERVAL,
-                        default=current.get(CONF_POLL_INTERVAL, 30),
-                    ): NumberSelector(NumberSelectorConfig(
-                        min=5, max=300, step=1, mode=NumberSelectorMode.BOX,
-                    )),
-                    vol.Required(
-                        CONF_UNAVAILABLE_ON_FAULT,
-                        default=current.get(CONF_UNAVAILABLE_ON_FAULT, False),
-                    ): BooleanSelector(),
-                }
-            ),
-        )
+        schema: dict = {
+            vol.Required(
+                CONF_POLL_INTERVAL,
+                default=current.get(CONF_POLL_INTERVAL, 30),
+            ): NumberSelector(NumberSelectorConfig(
+                min=5, max=300, step=1, mode=NumberSelectorMode.BOX,
+            )),
+            vol.Required(
+                CONF_UNAVAILABLE_ON_FAULT,
+                default=current.get(CONF_UNAVAILABLE_ON_FAULT, False),
+            ): BooleanSelector(),
+        }
+        if self._config_entry.data.get("device_type") == DEVICE_TYPE_HEATER:
+            # Thresholds follow the HA system unit (°F/ft or °C/m).
+            imperial = self.hass.config.units.temperature_unit == UnitOfTemperature.FAHRENHEIT
+            schema.update({
+                vol.Required(
+                    CONF_SELF_HEAL_ENABLED,
+                    default=current.get(CONF_SELF_HEAL_ENABLED, False),
+                ): BooleanSelector(),
+                vol.Required(
+                    CONF_SELF_HEAL_HOURS,
+                    default=current.get(CONF_SELF_HEAL_HOURS, SELF_HEAL_HOURS_DEFAULT),
+                ): NumberSelector(NumberSelectorConfig(
+                    min=1, max=24, step=1, mode=NumberSelectorMode.BOX,
+                )),
+                # Optional and clearable: suggested_value instead of default.
+                vol.Optional(
+                    CONF_SELF_HEAL_REF_ENTITY,
+                    description={"suggested_value": current.get(CONF_SELF_HEAL_REF_ENTITY)},
+                ): EntitySelector(EntitySelectorConfig(
+                    domain="sensor", device_class="temperature",
+                )),
+                vol.Required(
+                    CONF_SELF_HEAL_REF_DELTA,
+                    default=current.get(
+                        CONF_SELF_HEAL_REF_DELTA,
+                        SELF_HEAL_REF_DELTA_F if imperial else SELF_HEAL_REF_DELTA_C,
+                    ),
+                ): NumberSelector(NumberSelectorConfig(
+                    min=1, max=20, step=1, mode=NumberSelectorMode.BOX,
+                )),
+                vol.Required(
+                    CONF_SELF_HEAL_ALTITUDE,
+                    default=current.get(CONF_SELF_HEAL_ALTITUDE, False),
+                ): BooleanSelector(),
+                vol.Required(
+                    CONF_SELF_HEAL_ALT_DELTA,
+                    default=current.get(
+                        CONF_SELF_HEAL_ALT_DELTA,
+                        SELF_HEAL_ALT_DELTA_FT if imperial else SELF_HEAL_ALT_DELTA_M,
+                    ),
+                ): NumberSelector(NumberSelectorConfig(
+                    min=20, max=2000, step=10, mode=NumberSelectorMode.BOX,
+                )),
+            })
+        return self.async_show_form(step_id="init", data_schema=vol.Schema(schema))
