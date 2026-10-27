@@ -161,6 +161,12 @@ class TestHeaterClimateState:
         entity, _ = _heater_entity(data=data)
         assert ClimateEntityFeature.FAN_MODE not in entity.supported_features
 
+    def test_supported_features_include_turn_on_off(self):
+        # Required for climate.turn_on/turn_off — used by tile card toggle (issue #54).
+        entity, _ = _heater_entity()
+        assert ClimateEntityFeature.TURN_ON in entity.supported_features
+        assert ClimateEntityFeature.TURN_OFF in entity.supported_features
+
     def test_hvac_action_heating_when_normal(self):
         data = {**_make_heater_coord().data, "machine_state": 1, "fault_code": 0}
         entity, _ = _heater_entity(data=data)
@@ -261,6 +267,18 @@ class TestHeaterClimateActions:
         entity, coord = _heater_entity()
         await entity.async_set_fan_mode("3")
         coord.async_request_refresh.assert_called_once()
+
+    async def test_turn_on_sends_heat_command(self):
+        # climate.turn_on uses the ClimateEntity default, which resolves to
+        # async_set_hvac_mode(HEAT) since OFF/HEAT are the only modes.
+        entity, coord = _heater_entity()
+        await entity.async_turn_on()
+        coord._client.send_command.assert_called_once_with(0x01, bytes([0x01]))
+
+    async def test_turn_off_sends_shutdown_command(self):
+        entity, coord = _heater_entity()
+        await entity.async_turn_off()
+        coord._client.send_command.assert_called_once_with(0x02, bytes([0x00]))
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +526,12 @@ class TestACClimateActions:
         assert calls[0].args == (0x01, bytes([0x02]))      # power on
         assert calls[1].args == (0x02, bytes([0x03]))      # FAN_ONLY = 0x03
 
+    async def test_turn_off_sends_power_off(self):
+        # No override: the ClimateEntity default routes to async_set_hvac_mode(OFF).
+        entity, coord = _ac_entity()
+        await entity.async_turn_off()
+        coord._client.send_command.assert_called_once_with(0x01, bytes([0x01]))
+
 
 # ---------------------------------------------------------------------------
 # Heater — icon
@@ -556,3 +580,62 @@ class TestHeaterClimateAvailable:
         from custom_components.velit.const import CONF_UNAVAILABLE_ON_FAULT
         entity, _ = _heater_entity(data=None, options={CONF_UNAVAILABLE_ON_FAULT: True})
         assert entity.available is True
+
+
+# ---------------------------------------------------------------------------
+# Write validation — service calls bypass the UI and must be range-checked
+# ---------------------------------------------------------------------------
+
+
+class TestHeaterWriteValidation:
+    async def test_set_temperature_clamps_above_max(self):
+        entity, coord = _heater_entity()
+        await entity.async_set_temperature(temperature=50.0)
+        coord._client.send_command.assert_awaited_once_with(0x08, bytes([37]))
+
+    async def test_set_temperature_clamps_below_min(self):
+        entity, coord = _heater_entity()
+        await entity.async_set_temperature(temperature=-10.0)
+        coord._client.send_command.assert_awaited_once_with(0x08, bytes([4]))
+
+    async def test_set_temperature_clamps_above_max_fahrenheit_device(self):
+        entity, coord = _heater_entity(temp_unit=UnitOfTemperature.FAHRENHEIT)
+        await entity.async_set_temperature(temperature=100.0)
+        coord._client.send_command.assert_awaited_once_with(0x08, bytes([99]))
+
+    async def test_set_temperature_in_range_unchanged(self):
+        entity, coord = _heater_entity()
+        await entity.async_set_temperature(temperature=22.0)
+        coord._client.send_command.assert_awaited_once_with(0x08, bytes([22]))
+
+    async def test_set_fan_mode_rejects_out_of_range_gear(self):
+        entity, coord = _heater_entity()
+        await entity.async_set_fan_mode("9")
+        coord._client.send_command.assert_not_awaited()
+
+    async def test_set_fan_mode_rejects_non_numeric(self):
+        entity, coord = _heater_entity()
+        await entity.async_set_fan_mode("high")
+        coord._client.send_command.assert_not_awaited()
+
+
+class TestACWriteValidation:
+    async def test_set_temperature_clamps_above_max(self):
+        entity, coord = _ac_entity()
+        await entity.async_set_temperature(temperature=45.0)
+        coord._client.send_command.assert_awaited_once_with(0x03, bytes([30]))
+
+    async def test_set_temperature_clamps_below_min(self):
+        entity, coord = _ac_entity()
+        await entity.async_set_temperature(temperature=5.0)
+        coord._client.send_command.assert_awaited_once_with(0x03, bytes([17]))
+
+    async def test_set_fan_mode_rejects_out_of_range_speed(self):
+        entity, coord = _ac_entity()
+        await entity.async_set_fan_mode("0")
+        coord._client.send_command.assert_not_awaited()
+
+    async def test_set_fan_mode_rejects_non_numeric(self):
+        entity, coord = _ac_entity()
+        await entity.async_set_fan_mode("turbo")
+        coord._client.send_command.assert_not_awaited()
