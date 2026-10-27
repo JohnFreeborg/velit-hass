@@ -321,17 +321,21 @@ class TestPrimeSwitchRunPrime:
         assert entity._prime_task is None
 
     async def test_cancelled_sends_stop_command(self):
+        # Cancellation is re-raised after cleanup so task.cancel() semantics
+        # are preserved for callers awaiting the task (e.g. entity removal).
         entity, coord = _make_prime_entity()
         coord.prime_remaining = 30
         with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
-            await entity._run_prime()
+            with pytest.raises(asyncio.CancelledError):
+                await entity._run_prime()
         coord._client.send_command.assert_awaited_once_with(0x06, bytes([0x00]))
 
     async def test_cancelled_resets_state(self):
         entity, coord = _make_prime_entity()
         coord.prime_remaining = 30
         with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
-            await entity._run_prime()
+            with pytest.raises(asyncio.CancelledError):
+                await entity._run_prime()
         assert coord.priming is False
         assert coord.prime_remaining == 0
         assert entity._prime_task is None
