@@ -187,10 +187,9 @@ class VelitConfigFlow(ConfigFlow, domain=DOMAIN):
         """
         errors: dict[str, str] = {}
         if user_input is not None:
-            address = user_input[CONF_ADDRESS].strip()
-            if _MAC_ADDRESS_RE.match(address):
-                address = address.upper()
-            elif not _COREBLUETOOTH_UUID_RE.match(address):
+            # Uppercase both forms so unique IDs match the address HA reports.
+            address = user_input[CONF_ADDRESS].strip().upper()
+            if not (_MAC_ADDRESS_RE.match(address) or _COREBLUETOOTH_UUID_RE.match(address)):
                 errors["base"] = "invalid_address"
             if not errors:
                 await self.async_set_unique_id(address)

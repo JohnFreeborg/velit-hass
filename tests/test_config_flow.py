@@ -353,3 +353,25 @@ async def test_manual_entry_accepts_corebluetooth_uuid(hass: HomeAssistant) -> N
         user_input={CONF_ADDRESS: "12345678-1234-1234-1234-123456789ABC"},
     )
     assert result["step_id"] == "device_type"
+
+
+async def test_manual_entry_normalizes_uuid_case(hass: HomeAssistant) -> None:
+    """Lowercase CoreBluetooth UUID input is stored uppercase, like MACs."""
+    with patch(_PATCH_DISCOVERED, return_value=[]):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={"next_step_id": "manual"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={CONF_ADDRESS: "12345678-1234-1234-1234-123456789abc"},
+    )
+    assert result["step_id"] == "device_type"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"device_type": DEVICE_TYPE_HEATER, CONF_NAME: "Heater"},
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_ADDRESS] == "12345678-1234-1234-1234-123456789ABC"
