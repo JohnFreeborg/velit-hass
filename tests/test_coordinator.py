@@ -416,6 +416,20 @@ class TestVelitACCoordinatorPoll:
         coord._adjust_poll_interval(0)
         assert coord.update_interval == coord._configured_interval
 
+    def test_adjust_poll_interval_normal_in_overtemp_standby(self):
+        from datetime import timedelta
+        coord = self._make_coord_sync()
+        coord.update_interval = timedelta(seconds=5)
+        coord._adjust_poll_interval(3)
+        assert coord.update_interval == coord._configured_interval
+
+    def test_adjust_poll_interval_fast_while_cooling_down(self):
+        from datetime import timedelta
+        coord = self._make_coord_sync()
+        coord.update_interval = timedelta(seconds=30)
+        coord._adjust_poll_interval(2)
+        assert coord.update_interval == timedelta(seconds=5)
+
     def _make_coord_sync(self):
         hass = _make_hass()
         entry = _make_entry(device_type="ac")
