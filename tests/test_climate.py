@@ -526,6 +526,12 @@ class TestACClimateActions:
         assert calls[0].args == (0x01, bytes([0x02]))      # power on
         assert calls[1].args == (0x02, bytes([0x03]))      # FAN_ONLY = 0x03
 
+    async def test_turn_off_sends_power_off(self):
+        # No override: the ClimateEntity default routes to async_set_hvac_mode(OFF).
+        entity, coord = _ac_entity()
+        await entity.async_turn_off()
+        coord._client.send_command.assert_called_once_with(0x01, bytes([0x01]))
+
 
 # ---------------------------------------------------------------------------
 # Heater — icon
