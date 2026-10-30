@@ -142,6 +142,12 @@ def _validate_response_checksum(raw: bytes) -> bool:
 _RECONNECT_DELAY_INITIAL = 1.0   # seconds
 _RECONNECT_DELAY_MAX = 30.0      # seconds
 _COMMAND_TIMEOUT = 5.0           # seconds to wait for a notification response
+# Read-only status queries get one retry after a missed response. The heater
+# occasionally drops a single query reply (observed 2026-10-17/18 in Overtemp
+# Standby); without a retry, two misses in a row mark every entity unavailable.
+# Control commands are never retried so a command can never be applied twice.
+_RETRYABLE_FUNCS = frozenset({0x0A, 0x0B})
+_QUERY_RETRIES = 1
 
 
 class VelitHeaterClient:
@@ -269,10 +275,11 @@ class VelitHeaterClient:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[dict | None] = loop.create_future()
         await self._queue.put((func, data, fut))
+        attempts = 1 + (_QUERY_RETRIES if func in _RETRYABLE_FUNCS else 0)
         try:
-            # Allow extra headroom beyond the per-command timeout so the caller
-            # future is never orphaned inside the queue.
-            return await asyncio.wait_for(fut, timeout=timeout + 2.0)
+            # Allow extra headroom beyond the per-command timeout (and any
+            # retries) so the caller future is never orphaned inside the queue.
+            return await asyncio.wait_for(fut, timeout=timeout * attempts + 2.0)
         except asyncio.TimeoutError:
             _LOGGER.warning("send_command timed out waiting for result (func 0x%02X)", func)
             return None
@@ -291,36 +298,50 @@ class VelitHeaterClient:
             except asyncio.TimeoutError:
                 continue
 
-            loop = asyncio.get_running_loop()
-            self._pending = loop.create_future()
-            self._pending_func = func
             result: dict | None = None
-
+            attempts = 1 + (_QUERY_RETRIES if func in _RETRYABLE_FUNCS else 0)
             try:
-                packet = build_command(
-                    self._master_addr, self._slave_addr, func, data
-                )
-                await self._client.write_gatt_char(  # type: ignore[union-attr]
-                    UUID_WRITE, packet, response=True
-                )
-                try:
-                    result = await asyncio.wait_for(
-                        asyncio.shield(self._pending), timeout=_COMMAND_TIMEOUT
-                    )
-                except asyncio.TimeoutError:
-                    _LOGGER.warning(
-                        "No notification within %.0fs for func 0x%02X",
-                        _COMMAND_TIMEOUT, func,
-                    )
-            except Exception as exc:
-                _LOGGER.warning("Command write failed (func 0x%02X): %s", func, exc)
+                for attempt in range(1, attempts + 1):
+                    result = await self._write_and_wait(func, data)
+                    if result is not None or not self._connected:
+                        break
+                    if attempt < attempts:
+                        _LOGGER.debug(
+                            "Retrying func 0x%02X after missed response", func
+                        )
             finally:
-                self._pending = None
-                self._pending_func = None
                 self._queue.task_done()
 
             if not caller_fut.done():
                 caller_fut.set_result(result)
+
+    async def _write_and_wait(self, func: int, data: bytes) -> dict | None:
+        """Write one command and wait for its response. Returns None on failure."""
+        loop = asyncio.get_running_loop()
+        self._pending = loop.create_future()
+        self._pending_func = func
+        try:
+            packet = build_command(
+                self._master_addr, self._slave_addr, func, data
+            )
+            await self._client.write_gatt_char(  # type: ignore[union-attr]
+                UUID_WRITE, packet, response=True
+            )
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(self._pending), timeout=_COMMAND_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                _LOGGER.warning(
+                    "No notification within %.0fs for func 0x%02X",
+                    _COMMAND_TIMEOUT, func,
+                )
+        except Exception as exc:
+            _LOGGER.warning("Command write failed (func 0x%02X): %s", func, exc)
+        finally:
+            self._pending = None
+            self._pending_func = None
+        return None
 
     def _on_notification(
         self, _char: BleakGATTCharacteristic, data: bytearray
