@@ -59,6 +59,10 @@ HEATER_SENSORS: tuple[VelitSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        # Fahrenheit-mode readings are converted to Celsius, which leaves long
+        # decimals. Round for display only so the stored value stays exact and
+        # converts back to the whole degree the device reported.
+        suggested_display_precision=1,
     ),
     VelitSensorEntityDescription(
         key="altitude",

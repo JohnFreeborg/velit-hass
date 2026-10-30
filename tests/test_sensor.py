@@ -198,3 +198,8 @@ class TestACSensorFault:
         entity = _make_ac_sensor(description, _make_ac_data())
         entity.coordinator.data = None
         assert entity.native_value is None
+
+
+def test_heater_inlet_temp_display_precision():
+    description = next(d for d in HEATER_SENSORS if d.key == "inlet_temp")
+    assert description.suggested_display_precision == 1
