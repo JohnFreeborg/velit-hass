@@ -58,7 +58,21 @@
         "title": "Velit Options",
         "data": {
           "poll_interval": "Poll interval (seconds)",
-          "unavailable_on_fault": "Show device as unavailable when fault is active"
+          "unavailable_on_fault": "Show device as unavailable when fault is active",
+          "self_heal_enabled": "Error 16 self-heal",
+          "self_heal_hours": "Self-heal after the heater temperature is unchanged for (hours)",
+          "self_heal_ref_entity": "Reference temperature sensor (optional)",
+          "self_heal_ref_delta": "Reference sensor deviation (°F or °C)",
+          "self_heal_altitude": "Also self-heal when altitude changes",
+          "self_heal_alt_delta": "Altitude change (ft or m)"
+        },
+        "data_description": {
+          "self_heal_enabled": "When the heater's temperature reading stops changing in Standby (the Error 16 signature), re-send the current setpoint to clear it. The setpoint itself does not change.",
+          "self_heal_hours": "Longer for heaters boxed in or shaded, shorter for heaters open to the cabin.",
+          "self_heal_ref_entity": "Another temperature sensor in the same space. If it moves by the deviation below while the heater's reading holds still, self-heal right away.",
+          "self_heal_ref_delta": "How far the reference sensor must move, in your Home Assistant temperature unit. Default 5 °F (3 °C).",
+          "self_heal_altitude": "If the vehicle moves up or down by the altitude change below while the heater's reading holds still, self-heal right away.",
+          "self_heal_alt_delta": "Feet if Home Assistant uses °F, metres if °C. Default 100 ft (30 m); parked readings wobble about 10 ft."
         }
       }
     }
