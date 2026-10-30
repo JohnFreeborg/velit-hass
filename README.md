@@ -33,11 +33,11 @@ Why use this instead of the phone app?
 
 | Device | Type | Tested | Firmware |
 |---|---|---|---|
-| Velit 4000P (fixed) | Heater | Yes | 3.13 / 3.26 / 3.62 |
+| Velit 4000P (fixed) | Heater | Yes | 3.13 / 3.26 / 3.62 / 3.90 |
 | Velit Portable | Heater | No | — |
 | Velit 2000R | AC | In progress | — |
 | Velit 2000R Mini | AC | No | — |
-| Velit 3000R | AC | No | — |
+| Velit 3000R | AC | Yes | — |
 | Velit 2000U | AC | No | — |
 | Velit V3 | AC | No | — |
 
@@ -49,8 +49,8 @@ with the model and firmware version so the table can be updated.
 ## Features
 
 **Heater**
-- Power on/off, manual mode, and thermostat mode
-- Gear/fan speed control (levels 1–5) — not yet hardware-validated
+- Power on/off, with Auto (thermostat) and Manual presets
+- Fan Level control (1–5) in Manual mode
 - Target temperature
 - Sensor entities: inlet temperature, altitude, fault code, machine state
 - Fault Active binary sensor — suitable for automations and dashboard cards
@@ -61,14 +61,14 @@ with the model and firmware version so the table can be updated.
   countdown sensor ticks in real time
 - Cleaning switch — initiates the residual fuel cleaning cycle and reflects cycle state
 - Firmware version shown in the HA device info panel
+- Optional Error 16 self-heal (see Options)
 - Bluetooth auto-discovery
 
 **Air Conditioner**
 - Power on/off
-- Modes: cool, heat, fan only, dry
-- Presets: energy saving, sleep, turbo
-- Fan speed control (levels 1–5)
-- Swing control
+- Modes: cool, fan only
+- Presets: Eco, Sleep, Turbo
+- Fan Level control (1–5)
 - Target temperature
 - Sensor entities: inlet temperature, fault code
 - BLE connection switch — release the device to the Velit mobile app without removing
@@ -89,14 +89,13 @@ with the model and firmware version so the table can be updated.
 
 ### HACS (recommended)
 
-A pre-release beta is available via HACS as a custom repository:
-
 1. Open HACS in Home Assistant.
 2. Go to **Integrations** and click the three-dot menu in the top right.
 3. Select **Custom repositories**.
 4. Add `https://github.com/JohnFreeborg/velit-hass` with category **Integration**.
 5. Search for **Velit** in HACS and click **Download**.
-6. In the download dialog, enable **Show beta versions** and select the pre-release version.
+6. To test a beta, enable **Show beta versions** in the download dialog and select the
+   pre-release version.
 7. Restart Home Assistant.
 
 ### Manual
@@ -134,7 +133,21 @@ Velit → Configure**:
 
 - **Poll interval** — how often the integration queries the device (5–300 seconds,
   default 30). The interval automatically drops to 5 seconds during active state
-  transitions and returns to the configured value once the device settles.
+  transitions and briefly after a command, then returns to the configured value.
+- **Error 16 self-heal** (heater only) — off by default. Some heaters show Error 16 on
+  the display without reporting it over Bluetooth; while it is up, the inlet temperature
+  stops updating. When enabled, the integration re-sends the current setpoint (the value
+  does not change) to clear it once any of these triggers fires while the heater is in
+  Standby:
+  - the inlet temperature has not changed for a set number of hours (1–24, default 3)
+  - an optional reference temperature sensor moves by a set amount (default 5 °F / 3 °C)
+    while the inlet holds still
+  - optionally, the altitude changes by a set amount (default 100 ft / 30 m) while the
+    inlet holds still
+
+  Thresholds use your HA unit system. It never acts while the heater is running, priming,
+  cleaning, or right after a command, and at most once an hour. A Last Self-heal
+  diagnostic sensor shows when it last acted and why.
 - **Mark unavailable on fault** — when enabled, the climate entity becomes unavailable
   while a fault code is active, preventing commands that the device would silently ignore.
 
@@ -170,8 +183,9 @@ Velit → Configure**:
 
 **Heater takes a long time to turn off**
 - After a heat cycle ends, the heater runs a cooling-down cycle before shutting off
-  completely. This typically takes around 3 minutes and is normal device behaviour.
+  completely. This typically takes about 5 minutes and is normal device behaviour.
   The climate card will reflect the cooling state during this period.
+- The heater ignores turn-on while cooling down. Wait for it to return to Standby.
 
 **Fault sensor shows an error code**
 - Fault descriptions are listed on the device page in Home Assistant.

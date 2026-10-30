@@ -134,7 +134,7 @@ Relevant log messages to watch for:
 | Message | Meaning |
 |---|---|
 | `Connected to <address>` | BLE connection established |
-| `Detected temp unit °C/°F` | Unit detection result on first connect |
+| `detected temp unit °C` or `°F` | Unit detection result on first connect |
 | `No response to Query 1` | Device did not respond — check range and power |
 | `Connection lost to <address>` | Unexpected disconnect — integration will attempt reconnect |
 | `Attempting reconnect in Xs` | Reconnect backoff in progress |
