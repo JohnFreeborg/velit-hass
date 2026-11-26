@@ -556,3 +556,56 @@ class TestHeaterClimateAvailable:
         from custom_components.velit.const import CONF_UNAVAILABLE_ON_FAULT
         entity, _ = _heater_entity(data=None, options={CONF_UNAVAILABLE_ON_FAULT: True})
         assert entity.available is True
+
+
+# ---------------------------------------------------------------------------
+# Failed commands — no reply from the device
+# ---------------------------------------------------------------------------
+
+
+class TestFailedCommands:
+    async def test_heater_off_raises_and_keeps_state(self):
+        from homeassistant.exceptions import HomeAssistantError
+
+        entity, coord = _heater_entity()
+        coord._client.send_command = AsyncMock(return_value=None)
+        with pytest.raises(HomeAssistantError):
+            await entity.async_set_hvac_mode(HVACMode.OFF)
+        assert entity._optimistic_hvac_mode is None
+        entity.async_write_ha_state.assert_not_called()
+        coord.async_request_refresh.assert_not_called()
+
+    async def test_heater_preset_raises_and_keeps_state(self):
+        from homeassistant.exceptions import HomeAssistantError
+
+        entity, coord = _heater_entity()
+        coord._client.send_command = AsyncMock(return_value=None)
+        with pytest.raises(HomeAssistantError):
+            await entity.async_set_preset_mode("Auto")
+        assert entity._optimistic_preset_mode is None
+
+    async def test_heater_level_raises(self):
+        from homeassistant.exceptions import HomeAssistantError
+
+        entity, coord = _heater_entity()
+        coord._client.send_command = AsyncMock(return_value=None)
+        with pytest.raises(HomeAssistantError):
+            await entity.async_set_fan_mode("3")
+
+    async def test_ac_off_raises_and_keeps_state(self):
+        from homeassistant.exceptions import HomeAssistantError
+
+        entity, coord = _ac_entity()
+        coord._client.send_command = AsyncMock(return_value=None)
+        with pytest.raises(HomeAssistantError):
+            await entity.async_set_hvac_mode(HVACMode.OFF)
+        assert entity._optimistic_hvac_mode is None
+        entity.async_write_ha_state.assert_not_called()
+
+    async def test_ac_temperature_raises(self):
+        from homeassistant.exceptions import HomeAssistantError
+
+        entity, coord = _ac_entity()
+        coord._client.send_command = AsyncMock(return_value=None)
+        with pytest.raises(HomeAssistantError):
+            await entity.async_set_temperature(temperature=22)

@@ -27,6 +27,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .commands import async_send_checked
 from .const import (
     CONF_UNAVAILABLE_ON_FAULT,
     DEVICE_TYPE_HEATER,
@@ -262,10 +263,10 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if hvac_mode == HVACMode.OFF:
-            await self.coordinator._client.send_command(0x02, bytes([0x00]))
+            await async_send_checked(self.coordinator._client, 0x02, bytes([0x00]))
         elif hvac_mode == HVACMode.HEAT:
             mode_byte = 0x02 if self.preset_mode == "Auto" else 0x01
-            await self.coordinator._client.send_command(0x01, bytes([mode_byte]))
+            await async_send_checked(self.coordinator._client, 0x01, bytes([mode_byte]))
         # Write expected state immediately so the UI responds without waiting
         # for the next poll. Coordinator confirmation or window expiry clears it.
         self._optimistic_hvac_mode = hvac_mode
@@ -274,13 +275,13 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
         await self.coordinator.async_request_refresh()
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
-        await self.coordinator._client.send_command(0x07, bytes([int(fan_mode)]))
+        await async_send_checked(self.coordinator._client, 0x07, bytes([int(fan_mode)]))
         self.coordinator._post_command_fast_polls = 6
         await self.coordinator.async_request_refresh()
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         mode_byte = 0x02 if preset_mode == "Auto" else 0x01
-        await self.coordinator._client.send_command(0x00, bytes([mode_byte]))
+        await async_send_checked(self.coordinator._client, 0x00, bytes([mode_byte]))
         self._optimistic_preset_mode = preset_mode
         self.async_write_ha_state()
         self.coordinator._post_command_fast_polls = 6
@@ -295,7 +296,7 @@ class VelitHeaterClimateEntity(CoordinatorEntity[VelitHeaterCoordinator], Climat
             value = round(celsius_to_fahrenheit(temp_c))
         else:
             value = round(temp_c)
-        await self.coordinator._client.send_command(0x08, bytes([value]))
+        await async_send_checked(self.coordinator._client, 0x08, bytes([value]))
         self.coordinator._post_command_fast_polls = 6
         await self.coordinator.async_request_refresh()
 
@@ -457,18 +458,18 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if hvac_mode == HVACMode.OFF:
-            await self.coordinator._client.send_command(0x01, bytes([0x01]))
+            await async_send_checked(self.coordinator._client, 0x01, bytes([0x01]))
         else:
             # Power on first if currently off, then set mode.
             if self.hvac_mode == HVACMode.OFF:
-                await self.coordinator._client.send_command(0x01, bytes([0x02]))
+                await async_send_checked(self.coordinator._client, 0x01, bytes([0x02]))
             mode_map = {
                 HVACMode.COOL: _AC_MODE_COOL,
                 HVACMode.FAN_ONLY: _AC_MODE_FAN,
             }
             code = mode_map.get(hvac_mode)
             if code is not None:
-                await self.coordinator._client.send_command(0x02, bytes([code]))
+                await async_send_checked(self.coordinator._client, 0x02, bytes([code]))
         self._optimistic_hvac_mode = hvac_mode
         self.async_write_ha_state()
         self.coordinator._post_command_fast_polls = 6
@@ -482,7 +483,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
                 HVACMode.FAN_ONLY: _AC_MODE_FAN,
             }
             code = mode_map.get(self._last_hvac_mode, _AC_MODE_COOL)
-            await self.coordinator._client.send_command(0x02, bytes([code]))
+            await async_send_checked(self.coordinator._client, 0x02, bytes([code]))
         else:
             preset_map = {
                 AC_PRESET_ENERGY_SAVING: _AC_MODE_ENERGY_SAVING,
@@ -491,7 +492,7 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
             }
             code = preset_map.get(preset_mode)
             if code is not None:
-                await self.coordinator._client.send_command(0x02, bytes([code]))
+                await async_send_checked(self.coordinator._client, 0x02, bytes([code]))
         self._optimistic_preset_mode = preset_mode
         self.async_write_ha_state()
         self.coordinator._post_command_fast_polls = 6
@@ -505,12 +506,12 @@ class VelitACClimateEntity(CoordinatorEntity[VelitACCoordinator], ClimateEntity)
             value = round(celsius_to_fahrenheit(temp_c))
         else:
             value = round(temp_c)
-        await self.coordinator._client.send_command(0x03, bytes([value]))
+        await async_send_checked(self.coordinator._client, 0x03, bytes([value]))
         self.coordinator._post_command_fast_polls = 6
         await self.coordinator.async_request_refresh()
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
-        await self.coordinator._client.send_command(0x04, bytes([int(fan_mode)]))
+        await async_send_checked(self.coordinator._client, 0x04, bytes([int(fan_mode)]))
         self.coordinator._post_command_fast_polls = 6
         await self.coordinator.async_request_refresh()
 

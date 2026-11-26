@@ -35,9 +35,9 @@ Why use this instead of the phone app?
 |---|---|---|---|
 | Velit 4000P (fixed) | Heater | Yes | 3.13 / 3.26 / 3.62 |
 | Velit Portable | Heater | No | — |
-| Velit 2000R | AC | In progress | — |
+| Velit 2000R | AC | Yes | — |
 | Velit 2000R Mini | AC | No | — |
-| Velit 3000R | AC | No | — |
+| Velit 3000R | AC | Yes | — |
 | Velit 2000U | AC | No | — |
 | Velit V3 | AC | No | — |
 
@@ -50,7 +50,7 @@ with the model and firmware version so the table can be updated.
 
 **Heater**
 - Power on/off, manual mode, and thermostat mode
-- Gear/fan speed control (levels 1–5) — not yet hardware-validated
+- Heat level control (levels 1–5) in manual mode
 - Target temperature
 - Sensor entities: inlet temperature, altitude, fault code, machine state
 - Fault Active binary sensor — suitable for automations and dashboard cards
@@ -85,19 +85,34 @@ with the model and firmware version so the table can be updated.
 
 ---
 
+<!-- ha-marketplace:exclude-start -->
 ## Installation
 
-### HACS (recommended)
+[![Open your Home Assistant instance and open a repository in the Marketplace.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=JohnFreeborg&repository=velit-hass&category=integration)
 
-A pre-release beta is available via HACS as a custom repository:
+The button opens Velit in the Marketplace (Home Assistant 2026.11 and later) or in HACS
+(earlier versions). If Velit is not in the catalog yet, it offers to add it first.
 
-1. Open HACS in Home Assistant.
-2. Go to **Integrations** and click the three-dot menu in the top right.
-3. Select **Custom repositories**.
-4. Add `https://github.com/JohnFreeborg/velit-hass` with category **Integration**.
-5. Search for **Velit** in HACS and click **Download**.
-6. In the download dialog, enable **Show beta versions** and select the pre-release version.
-7. Restart Home Assistant.
+### Marketplace (Home Assistant 2026.11 and later)
+
+1. Go to **Settings** > **Marketplace**. The first time, accept the warning.
+2. Search for **Velit** and open it.
+3. Select **Install**, review the version, and select **Install** again.
+4. The Velit setup opens when the install finishes. No restart is needed.
+
+If Velit does not show in search, select **Add from link**, enter `JohnFreeborg/velit-hass`,
+select **Add**, then open it and install. Adding from a link asks you to connect GitHub.
+
+Updates appear under **Settings** > **Updates**. Restart Home Assistant after updating.
+
+### HACS (Home Assistant 2026.10 and earlier)
+
+1. Open **HACS** and search for **Velit**.
+2. Open it and select **Download**.
+3. Restart Home Assistant.
+
+If Velit does not show in search, open the three-dot menu, select **Custom repositories**,
+add `https://github.com/JohnFreeborg/velit-hass` with type **Integration**, then download.
 
 ### Manual
 
@@ -107,6 +122,7 @@ A pre-release beta is available via HACS as a custom repository:
    <config>/custom_components/velit/
    ```
 3. Restart Home Assistant.
+<!-- ha-marketplace:exclude-end -->
 
 ---
 

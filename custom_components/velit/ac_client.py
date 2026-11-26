@@ -10,12 +10,14 @@ Packet structure (response, AC to app):
   [0x5A][0x5A][length][product_code][func][data N][checksum 1B][0x0D][0x0A]
 
 Checksum: sum of all bytes from frame header through data, low byte only.
-Verified against the single known example in the protocol document.
-Additional examples needed for full confidence — hardware verification required.
+Matches the protocol document example and every reply captured from real units.
 
-Length field: based on the single documented example (1 data byte, length=6),
-the length value appears to equal len(data) + 5. This is a theory and requires
-hardware verification with multi-byte data payloads.
+Length field: len(data) + 5. Every command this integration sends carries exactly
+one data byte (length 6), the same shape as the protocol document example and the
+replies real units send. Multi-byte payloads are never sent.
+
+Hardware-confirmed: power, mode (cool / fan), presets, setpoint, and fan speed writes
+on Velit 2000R and 3000R units.
 
 Note: command transmission interval must be at least 400ms.
 On no response within 3 seconds, retry once. After 3 total failures,
@@ -49,8 +51,7 @@ _LOGGER = logging.getLogger(__name__)
 _HEADER = bytes([0x5A, 0x5A])
 _TERMINATOR = bytes([0x0D, 0x0A])
 
-# Product code used in the documented example. The protocol does not
-# explicitly document all valid product code values — needs verification.
+# Product code from the documented example. Real units echo 0x01 in every reply.
 DEFAULT_PRODUCT_CODE = 0x01
 
 # Minimum valid response: header(2) + len(1) + product(1) + func(1) + data(>=1) + cksum(1) + term(2)
@@ -68,8 +69,8 @@ def build_command(func: int, data: bytes, product_code: int = DEFAULT_PRODUCT_CO
     Returns:
         Complete packet as bytes including header, checksum, and terminator.
     """
-    # Length theory: len(data) + 5, based on the single documented example.
-    # The example has 1 data byte and length=6: 1 + 5 = 6.
+    # len(data) + 5: one data byte gives length 6, as in the protocol example
+    # and in replies from real units.
     length = len(data) + 5
 
     payload = _HEADER + bytes([length, product_code, func]) + data

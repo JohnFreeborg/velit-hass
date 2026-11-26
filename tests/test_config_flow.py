@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
 from homeassistant import config_entries
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
@@ -21,6 +22,16 @@ from custom_components.velit.const import DEVICE_TYPE_AC, DEVICE_TYPE_HEATER, DO
 # ---------------------------------------------------------------------------
 # Test fixtures
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def mark_bluetooth_loaded(hass: HomeAssistant) -> None:
+    """Treat the bluetooth dependency as set up.
+
+    velit lists bluetooth in manifest dependencies. Setting up the real bluetooth
+    integration needs host adapters, and these tests only exercise the config flow.
+    """
+    hass.config.components.add("bluetooth")
+
 
 HEATER_ADDRESS = "AA:BB:CC:DD:EE:01"
 HEATER_NAME = "VELIT-VB52_FHJ/4/1"

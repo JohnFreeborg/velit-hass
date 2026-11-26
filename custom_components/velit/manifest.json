@@ -1,7 +1,6 @@
 {
   "domain": "velit",
   "name": "Velit",
-  "after_dependencies": ["bluetooth"],
   "bluetooth": [
     {"local_name": "VELIT*", "connectable": true},
     {"local_name": "VLIT*", "connectable": true},
@@ -12,10 +11,11 @@
   ],
   "codeowners": ["@JohnFreeborg", "@jeremyroe"],
   "config_flow": true,
+  "dependencies": ["bluetooth"],
   "documentation": "https://github.com/JohnFreeborg/velit-hass",
   "integration_type": "device",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/JohnFreeborg/velit-hass/issues",
-  "requirements": ["bleak-retry-connector"],
-  "version": "0.1.0"
+  "requirements": [],
+  "version": "0.1.2"
 }
