@@ -145,6 +145,10 @@ Velit → Configure**:
   - optionally, the altitude changes by a set amount (default 100 ft / 30 m) while the
     inlet holds still
 
+  The reference sensor and altitude triggers only count once the inlet has held still for
+  a minimum time (10–240 minutes, default 30), so a working heater whose reading sits on
+  one degree for a few minutes does not set them off.
+
   Thresholds use your HA unit system. It never acts while the heater is running, priming,
   cleaning, or right after a command, and at most once an hour. A Last Self-heal
   diagnostic sensor shows when it last acted and why.

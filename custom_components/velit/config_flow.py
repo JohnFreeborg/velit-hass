@@ -47,6 +47,7 @@ from .const import (
     CONF_SELF_HEAL_ALTITUDE,
     CONF_SELF_HEAL_ENABLED,
     CONF_SELF_HEAL_HOURS,
+    CONF_SELF_HEAL_MIN_HOLD,
     CONF_SELF_HEAL_REF_DELTA,
     CONF_SELF_HEAL_REF_ENTITY,
     CONF_UNAVAILABLE_ON_FAULT,
@@ -56,6 +57,7 @@ from .const import (
     SELF_HEAL_ALT_DELTA_FT,
     SELF_HEAL_ALT_DELTA_M,
     SELF_HEAL_HOURS_DEFAULT,
+    SELF_HEAL_MIN_HOLD_DEFAULT,
     SELF_HEAL_REF_DELTA_C,
     SELF_HEAL_REF_DELTA_F,
     UUID_SERVICE,
@@ -315,6 +317,12 @@ class VelitOptionsFlow(OptionsFlow):
                     default=current.get(CONF_SELF_HEAL_HOURS, SELF_HEAL_HOURS_DEFAULT),
                 ): NumberSelector(NumberSelectorConfig(
                     min=1, max=24, step=1, mode=NumberSelectorMode.BOX,
+                )),
+                vol.Required(
+                    CONF_SELF_HEAL_MIN_HOLD,
+                    default=current.get(CONF_SELF_HEAL_MIN_HOLD, SELF_HEAL_MIN_HOLD_DEFAULT),
+                ): NumberSelector(NumberSelectorConfig(
+                    min=10, max=240, step=5, mode=NumberSelectorMode.BOX,
                 )),
                 # Optional and clearable: suggested_value instead of default.
                 vol.Optional(

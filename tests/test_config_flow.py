@@ -504,8 +504,8 @@ async def _options_keys(hass: HomeAssistant, device_type: str) -> set[str]:
 async def test_options_heater_shows_self_heal(hass: HomeAssistant) -> None:
     keys = await _options_keys(hass, DEVICE_TYPE_HEATER)
     assert {
-        "self_heal_enabled", "self_heal_hours", "self_heal_ref_entity", "self_heal_ref_delta",
-        "self_heal_altitude", "self_heal_alt_delta",
+        "self_heal_enabled", "self_heal_hours", "self_heal_min_hold", "self_heal_ref_entity",
+        "self_heal_ref_delta", "self_heal_altitude", "self_heal_alt_delta",
     } <= keys
 
 
