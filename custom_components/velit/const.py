@@ -8,11 +8,15 @@ CONF_UNAVAILABLE_ON_FAULT = "unavailable_on_fault"
 # Error 16 self-heal (heater only) — see VelitHeaterCoordinator._maybe_self_heal.
 CONF_SELF_HEAL_ENABLED = "self_heal_enabled"
 CONF_SELF_HEAL_HOURS = "self_heal_hours"
+CONF_SELF_HEAL_MIN_HOLD = "self_heal_min_hold"
 CONF_SELF_HEAL_REF_ENTITY = "self_heal_ref_entity"
 CONF_SELF_HEAL_ALTITUDE = "self_heal_altitude"
 CONF_SELF_HEAL_REF_DELTA = "self_heal_ref_delta"
 CONF_SELF_HEAL_ALT_DELTA = "self_heal_alt_delta"
 SELF_HEAL_HOURS_DEFAULT = 3
+# Minutes the inlet must hold still before the reference or altitude trigger
+# counts. A 1-degree reading can sit still for minutes during a drive.
+SELF_HEAL_MIN_HOLD_DEFAULT = 30
 # Trigger thresholds are entered in the HA system unit: °F and ft when HA uses
 # Fahrenheit, °C and m otherwise. Parked altitude jitter is about ±10 ft.
 SELF_HEAL_REF_DELTA_F = 5

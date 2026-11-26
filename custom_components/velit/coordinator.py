@@ -35,12 +35,14 @@ from .const import (
     CONF_SELF_HEAL_ALTITUDE,
     CONF_SELF_HEAL_ENABLED,
     CONF_SELF_HEAL_HOURS,
+    CONF_SELF_HEAL_MIN_HOLD,
     CONF_SELF_HEAL_REF_DELTA,
     CONF_SELF_HEAL_REF_ENTITY,
     DOMAIN,
     SELF_HEAL_ALT_DELTA_FT,
     SELF_HEAL_ALT_DELTA_M,
     SELF_HEAL_HOURS_DEFAULT,
+    SELF_HEAL_MIN_HOLD_DEFAULT,
     SELF_HEAL_REF_DELTA_C,
     SELF_HEAL_REF_DELTA_F,
 )
@@ -380,6 +382,9 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
         self._self_heal_window_s: float = (
             float(entry.options.get(CONF_SELF_HEAL_HOURS, SELF_HEAL_HOURS_DEFAULT)) * 3600
         )
+        self._self_heal_min_hold_s: float = (
+            float(entry.options.get(CONF_SELF_HEAL_MIN_HOLD, SELF_HEAL_MIN_HOLD_DEFAULT)) * 60
+        )
         self._self_heal_ref_entity: str | None = entry.options.get(CONF_SELF_HEAL_REF_ENTITY) or None
         self._self_heal_altitude: bool = entry.options.get(CONF_SELF_HEAL_ALTITUDE, False)
         # Thresholds are entered in the HA system unit: °F and ft, or °C and m.
@@ -544,6 +549,9 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
         trigger = None
         if frozen_s >= self._self_heal_window_s:
             trigger = "time"
+        elif frozen_s < self._self_heal_min_hold_s:
+            # Too soon for the reference or altitude trigger to mean anything.
+            pass
         elif self._ref_moved():
             trigger = "reference sensor"
         elif self._self_heal_altitude and self._altitude_moved():

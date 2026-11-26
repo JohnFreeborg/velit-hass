@@ -15,6 +15,7 @@ from custom_components.velit.const import (
     CONF_SELF_HEAL_ALTITUDE,
     CONF_SELF_HEAL_ENABLED,
     CONF_SELF_HEAL_HOURS,
+    CONF_SELF_HEAL_MIN_HOLD,
     CONF_SELF_HEAL_REF_DELTA,
     CONF_SELF_HEAL_REF_ENTITY,
 )
@@ -50,13 +51,22 @@ def _ref_state(value, unit=UnitOfTemperature.FAHRENHEIT):
 class _Rig:
     """Coordinator plus a scripted device: each poll answers Q1/Q2, writes succeed."""
 
-    def __init__(self, options: dict, ha_unit: str = UnitOfTemperature.FAHRENHEIT) -> None:
+    def __init__(
+        self,
+        options: dict,
+        ha_unit: str = UnitOfTemperature.FAHRENHEIT,
+        default_hold: bool = False,
+    ) -> None:
         hass = MagicMock()
         hass.config.units.temperature_unit = ha_unit
         hass.states.get = MagicMock(return_value=None)
         entry = MagicMock()
         entry.data = {"device_type": "heater", "address": "AA:BB:CC:DD:EE:FF", "name": "Test"}
-        entry.options = {CONF_SELF_HEAL_ENABLED: True, **options}
+        # Threshold tests run with no minimum hold; TestSelfHealMinHold covers it.
+        base = {CONF_SELF_HEAL_ENABLED: True}
+        if not default_hold:
+            base[CONF_SELF_HEAL_MIN_HOLD] = 0
+        entry.options = {**base, **options}
         with patch("custom_components.velit.coordinator.VelitHeaterClient") as mock_cls:
             self.coord = VelitHeaterCoordinator(hass, entry)
         self.coord._client = mock_cls.return_value
@@ -341,3 +351,55 @@ class TestSelfHealAltitude:
         rig.q2 = _q2(alt=1029 + 99)
         await rig.poll(0.2 * HOUR)
         assert len(rig.writes) == 1
+
+
+class TestSelfHealMinHold:
+    async def test_altitude_waits_for_default_hold(self):
+        # 2026-10-29: a working heater sat on one degree for a few minutes while
+        # the van climbed, and the altitude trigger fired at once.
+        rig = _Rig({CONF_SELF_HEAL_HOURS: 24, CONF_SELF_HEAL_ALTITUDE: True}, default_hold=True)
+        await rig.poll(0)
+        rig.q2 = _q2(alt=1200)
+        await rig.poll(0.1 * HOUR)
+        await rig.poll(0.49 * HOUR)
+        assert rig.writes == []
+        await rig.poll(0.5 * HOUR)
+        assert rig.writes == [bytes([0x08, 0x28])]
+        assert rig.coord.last_self_heal_trigger == "altitude"
+
+    async def test_reference_waits_for_default_hold(self):
+        rig = _Rig({CONF_SELF_HEAL_HOURS: 24, CONF_SELF_HEAL_REF_ENTITY: "sensor.cabin"}, default_hold=True)
+        rig.hass.states.get.return_value = _ref_state(60)
+        await rig.poll(0)
+        rig.hass.states.get.return_value = _ref_state(70)
+        await rig.poll(0.1 * HOUR)
+        assert rig.writes == []
+        await rig.poll(0.5 * HOUR)
+        assert rig.coord.last_self_heal_trigger == "reference sensor"
+
+    async def test_changing_inlet_never_reaches_hold(self):
+        # Driving: the inlet steps a degree every 8 minutes while altitude climbs.
+        rig = _Rig({CONF_SELF_HEAL_HOURS: 24, CONF_SELF_HEAL_ALTITUDE: True}, default_hold=True)
+        for i in range(12):
+            rig.q2 = _q2(inlet=0x80 - i, alt=1000 + 100 * i)
+            await rig.poll(i * 8 * 60.0)
+        assert rig.writes == []
+
+    async def test_custom_hold(self):
+        rig = _Rig({
+            CONF_SELF_HEAL_HOURS: 24,
+            CONF_SELF_HEAL_ALTITUDE: True,
+            CONF_SELF_HEAL_MIN_HOLD: 60,
+        })
+        await rig.poll(0)
+        rig.q2 = _q2(alt=1200)
+        await rig.poll(0.75 * HOUR)
+        assert rig.writes == []
+        await rig.poll(1 * HOUR)
+        assert len(rig.writes) == 1
+
+    async def test_time_trigger_unaffected(self):
+        rig = _Rig({CONF_SELF_HEAL_HOURS: 1, CONF_SELF_HEAL_MIN_HOLD: 240})
+        await rig.poll(0)
+        await rig.poll(1 * HOUR)
+        assert rig.coord.last_self_heal_trigger == "time"
