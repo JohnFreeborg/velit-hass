@@ -26,6 +26,7 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .commands import async_send_checked
 from .const import DEVICE_TYPE_AC, DEVICE_TYPE_HEATER, DOMAIN
 from .coordinator import VelitACCoordinator, VelitHeaterCoordinator
 
@@ -108,6 +109,7 @@ class VelitHeaterBLESwitch(CoordinatorEntity[VelitHeaterCoordinator], SwitchEnti
 
 
 _PRIME_DURATION = 30  # seconds — matches physical hardware button auto-stop
+_PUMP_STOP_ATTEMPTS = 3
 
 
 class VelitHeaterFuelPrimingSwitch(CoordinatorEntity[VelitHeaterCoordinator], SwitchEntity):
@@ -151,7 +153,7 @@ class VelitHeaterFuelPrimingSwitch(CoordinatorEntity[VelitHeaterCoordinator], Sw
         """Start the fuel pump prime cycle."""
         if self.coordinator.priming:
             return
-        await self.coordinator._client.send_command(0x05, bytes([0x00]))
+        await async_send_checked(self.coordinator._client, 0x05, bytes([0x00]))
         self.coordinator.priming = True
         self.coordinator.prime_remaining = _PRIME_DURATION
         self._prime_task = asyncio.create_task(self._run_prime())
@@ -166,6 +168,21 @@ class VelitHeaterFuelPrimingSwitch(CoordinatorEntity[VelitHeaterCoordinator], Sw
         if self._prime_task and not self._prime_task.done():
             self._prime_task.cancel()
 
+    async def _async_stop_pump(self) -> None:
+        """Send the pump stop command, retrying because no caller can see a failure.
+
+        The stop runs in the countdown task, not in a service call, so raising would
+        only be swallowed by the task. Retry instead and log an error if the heater
+        never acknowledges it.
+        """
+        for attempt in range(1, _PUMP_STOP_ATTEMPTS + 1):
+            if await self.coordinator._client.send_command(0x06, bytes([0x00])) is not None:
+                return
+            _LOGGER.warning("Fuel pump stop not acknowledged (attempt %d)", attempt)
+        _LOGGER.error(
+            "Fuel pump stop was not acknowledged after %d attempts", _PUMP_STOP_ATTEMPTS
+        )
+
     async def _run_prime(self) -> None:
         """Countdown task — ticks every second, sends stop on completion or cancellation."""
         try:
@@ -174,10 +191,10 @@ class VelitHeaterFuelPrimingSwitch(CoordinatorEntity[VelitHeaterCoordinator], Sw
                 self.coordinator.prime_remaining -= 1
                 self.async_write_ha_state()
                 self.coordinator._notify_prime_tick()
-            await self.coordinator._client.send_command(0x06, bytes([0x00]))
+            await self._async_stop_pump()
             _LOGGER.debug("Fuel pump prime auto-stopped after %ds", _PRIME_DURATION)
         except asyncio.CancelledError:
-            await self.coordinator._client.send_command(0x06, bytes([0x00]))
+            await self._async_stop_pump()
             _LOGGER.debug("Fuel pump prime stopped early by user")
         finally:
             self.coordinator.priming = False
@@ -229,7 +246,7 @@ class VelitHeaterCleaningSwitch(CoordinatorEntity[VelitHeaterCoordinator], Switc
         """Send the cleaning command and mark cycle as active."""
         if self.coordinator.cleaning:
             return
-        await self.coordinator._client.send_command(0x09, bytes([0x00]))
+        await async_send_checked(self.coordinator._client, 0x09, bytes([0x00]))
         self.coordinator.start_cleaning()
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()

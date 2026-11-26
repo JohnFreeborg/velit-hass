@@ -62,6 +62,11 @@
       }
     }
   },
+  "exceptions": {
+    "command_failed": {
+      "message": "The device did not respond. The command may not have reached it. Try again."
+    }
+  },
   "entity": {
     "climate": {
       "heater": {
@@ -95,9 +100,7 @@
     "sensor": {
       "prime_countdown": {
         "name": "Fuel Pump Prime Remaining"
-      }
-    },
-    "sensor": {
+      },
       "inlet_temp": {
         "name": "Temperature"
       },

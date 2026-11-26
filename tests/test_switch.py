@@ -422,3 +422,47 @@ def test_cleaning_unavailable_when_disconnected():
     entity, _ = _make_cleaning_entity(connected=False)
     assert entity.available is False
 
+
+
+# ---------------------------------------------------------------------------
+# Failed commands — no reply from the heater
+# ---------------------------------------------------------------------------
+
+
+class TestFailedCommands:
+    async def test_prime_start_raises_and_does_not_start(self):
+        from homeassistant.exceptions import HomeAssistantError
+
+        entity, coord = _make_prime_entity()
+        coord._client.send_command = AsyncMock(return_value=None)
+        with pytest.raises(HomeAssistantError):
+            await entity.async_turn_on()
+        assert coord.priming is False
+        assert entity._prime_task is None
+
+    async def test_cleaning_start_raises_and_does_not_start(self):
+        from homeassistant.exceptions import HomeAssistantError
+
+        entity, coord = _make_cleaning_entity()
+        coord._client.send_command = AsyncMock(return_value=None)
+        with pytest.raises(HomeAssistantError):
+            await entity.async_turn_on()
+        coord.start_cleaning.assert_not_called()
+
+    async def test_pump_stop_retries_until_acknowledged(self):
+        entity, coord = _make_prime_entity()
+        coord.prime_remaining = 0
+        coord._client.send_command = AsyncMock(side_effect=[None, {"func": 0x06}])
+        await entity._run_prime()
+        assert coord._client.send_command.await_count == 2
+        assert coord.priming is False
+
+    async def test_pump_stop_gives_up_after_attempts(self):
+        from custom_components.velit.switch import _PUMP_STOP_ATTEMPTS
+
+        entity, coord = _make_prime_entity()
+        coord.prime_remaining = 0
+        coord._client.send_command = AsyncMock(return_value=None)
+        await entity._run_prime()
+        assert coord._client.send_command.await_count == _PUMP_STOP_ATTEMPTS
+        assert coord.priming is False
