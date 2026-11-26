@@ -81,9 +81,13 @@ _MAX_ALTITUDE_FT = 30000 # feet   — above Everest (29032 ft)
 # Error 16 self-heal (opt-in). The heater shows Error 16 on its LCD without
 # reporting it over BLE; while it is up, the inlet reading stops changing
 # (voltage and altitude stay live). Re-sending the current setpoint clears it.
-# A freeze is inferred from the inlet holding still in Standby, confirmed by
-# time, an optional reference sensor, or an altitude change.
+# A freeze is inferred from the inlet holding still in Standby or Overtemp
+# Standby, confirmed by time, an optional reference sensor, or an altitude
+# change.
 _SELF_HEAL_MIN_GAP_S = 3600       # never re-send more than once an hour
+# Standby and Overtemp Standby. In Overtemp Standby the heater relights from
+# the inlet reading, so a frozen inlet can keep it from restarting.
+_SELF_HEAL_STATES = (0, 3)
 # Thresholds are compared as exact fractions in the user's unit. Only
 # differences are compared, so unit offsets drop out and conversions are
 # exact scale factors (a temperature step of 1 °F is exactly 5/9 °C; the
@@ -512,7 +516,8 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
     async def _maybe_self_heal(self, data: dict) -> None:
         """Re-send the current setpoint when the inlet reading looks frozen.
 
-        Only Standby counts, and never during a prime, cleaning cycle, or
+        Only Standby and Overtemp Standby count (moving between the two keeps
+        the baseline), and never during a prime, cleaning cycle, or
         post-command window. The freeze baseline restarts whenever the inlet
         changes or an ineligible poll intervenes; a command sets the
         post-command window, so commands restart it too.
@@ -521,7 +526,7 @@ class VelitHeaterCoordinator(_VelitBaseCoordinator):
         inlet = data["inlet_raw"]
         altitude = data["altitude"]
         eligible = (
-            data["machine_state"] == 0
+            data["machine_state"] in _SELF_HEAL_STATES
             and not self.priming
             and not self.cleaning
             and self._post_command_fast_polls == 0

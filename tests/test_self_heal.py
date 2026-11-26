@@ -26,6 +26,8 @@ HOUR = 3600.0
 # Standby, Fahrenheit setpoint 0x28 = 40 °F — the van's values during the 2026-10-21 episode.
 Q1_STANDBY = bytes([0x00, 0x02, 0x03, 0x28, 0x00, 0x50, 0x00])
 Q1_RUNNING = bytes([0x00, 0x02, 0x03, 0x28, 0x01, 0x50, 0x00])
+Q1_COOLING = bytes([0x00, 0x02, 0x03, 0x28, 0x02, 0x50, 0x00])
+Q1_OVERTEMP = bytes([0x00, 0x02, 0x03, 0x28, 0x03, 0x50, 0x00])
 
 
 def _q2(inlet=0x70, casing=0x4D, outlet=0x4C, alt=1029) -> bytes:
@@ -118,6 +120,50 @@ class TestSelfHealTime:
         await rig.poll(0)
         await rig.poll(5 * HOUR)
         assert rig.writes == []
+
+    async def test_cooling_down_never_fires(self):
+        rig = _Rig({CONF_SELF_HEAL_HOURS: 1})
+        rig.q1 = Q1_COOLING
+        await rig.poll(0)
+        await rig.poll(5 * HOUR)
+        assert rig.writes == []
+
+    async def test_fires_in_overtemp_standby(self):
+        # 2026-11-24: a heater left on overnight sits in Overtemp Standby
+        # between burns, so a freeze there must count too.
+        rig = _Rig({CONF_SELF_HEAL_HOURS: 3})
+        rig.q1 = Q1_OVERTEMP
+        await rig.poll(0)
+        await rig.poll(2.9 * HOUR)
+        assert rig.writes == []
+        await rig.poll(3 * HOUR)
+        assert rig.writes == [bytes([0x08, 0x28])]
+        assert rig.coord.last_self_heal_trigger == "time"
+
+    async def test_standby_and_overtemp_standby_share_baseline(self):
+        rig = _Rig({CONF_SELF_HEAL_HOURS: 3})
+        rig.q1 = Q1_OVERTEMP
+        await rig.poll(0)
+        rig.q1 = Q1_STANDBY
+        await rig.poll(1.5 * HOUR)
+        rig.q1 = Q1_OVERTEMP
+        await rig.poll(2.9 * HOUR)
+        assert rig.writes == []
+        await rig.poll(3 * HOUR)
+        assert len(rig.writes) == 1
+
+    async def test_burn_between_overtemp_standby_restarts_window(self):
+        rig = _Rig({CONF_SELF_HEAL_HOURS: 3})
+        rig.q1 = Q1_OVERTEMP
+        await rig.poll(0)
+        rig.q1 = Q1_RUNNING
+        await rig.poll(2 * HOUR)
+        rig.q1 = Q1_OVERTEMP
+        await rig.poll(2.5 * HOUR)  # fresh baseline
+        await rig.poll(5.4 * HOUR)
+        assert rig.writes == []
+        await rig.poll(5.5 * HOUR)
+        assert len(rig.writes) == 1
 
     @pytest.mark.parametrize("gate", ["priming", "cleaning", "post_command"])
     async def test_gated_states_restart_window(self, gate):

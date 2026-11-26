@@ -138,7 +138,7 @@ Velit → Configure**:
   the display without reporting it over Bluetooth; while it is up, the inlet temperature
   stops updating. When enabled, the integration re-sends the current setpoint (the value
   does not change) to clear it once any of these triggers fires while the heater is in
-  Standby:
+  Standby or Overtemp Standby:
   - the inlet temperature has not changed for a set number of hours (1–24, default 3)
   - an optional reference temperature sensor moves by a set amount (default 5 °F / 3 °C)
     while the inlet holds still
